@@ -946,6 +946,16 @@ function folderBadgeHtml(folder_id) {
                title="Filter by this folder" style="cursor:pointer">📁 ${escHtml(name)}</span>`;
 }
 
+// ADD THIS NEW HELPER:
+function faviconHtml(bm) {
+  if (bm.favicon_path) {
+    return `<img src="${API}/static/favicons/${bm.id}.ico" style="width:14px;height:14px;vertical-align:text-bottom;margin-right:6px;border-radius:2px;" onerror="this.style.display='none'">`;
+  } else if (bm.favicon_url) {
+    return `<img src="${escAttr(bm.favicon_url)}" style="width:14px;height:14px;vertical-align:text-bottom;margin-right:6px;border-radius:2px;" onerror="this.style.display='none'">`;
+  }
+  return `<span style="font-size:12px;margin-right:6px;opacity:0.7">🌐</span>`; 
+}
+
 // ── Card HTML ─────────────────────────────────────────────────────────────────
 function cardHtml(bm, idx) {
   const thumb = bm.screenshot ? thumbImg(bm.id) : placeholderDiv(true);
@@ -967,7 +977,10 @@ function cardHtml(bm, idx) {
     </div>
     <div class="card-body">
       <div class="card-title">${escHtml(bm.title || bm.url)}</div>
-      <div class="card-url">${escHtml(hostOf(bm.url))}</div>
+      <div class="card-url" style="display:flex;align-items:center;">
+  ${faviconHtml(bm)}
+  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(hostOf(bm.url))}</span>
+</div>
       <div class="card-meta">
         <span class="badge badge-vault">${escHtml(bm.vault || "default")}</span>
         ${folderBadgeHtml(bm.folder_id)}
@@ -994,7 +1007,10 @@ function rowHtml(bm, idx) {
       ${thumb}
       <div class="row-info">
         <div class="row-title">${escHtml(bm.title || bm.url)}</div>
-        <div class="row-url">${escHtml(bm.url)}</div>
+       <div class="row-url" style="display:flex;align-items:center;">
+  ${faviconHtml(bm)}
+  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(bm.url)}</span>
+</div>
       </div>
       <div class="row-badges">
         <span class="badge badge-vault">${escHtml(bm.vault || "default")}</span>
@@ -1128,7 +1144,11 @@ async function executeBulkFetch() {
       const bm = allBookmarks.find(b => b.id === id);
       if (bm) {
         bm.screenshot = true;
-        if (doArchive) bm.archived = true; 
+        bm.favicon_path = "ready"; // <--- ADD THIS LINE
+        if (doArchive) {
+           bm.archived = true; 
+           bm.html_path = "ready";
+        }
       }
     });
 
@@ -1387,8 +1407,10 @@ function openDetail(bm) {
   document.getElementById("detailBody").innerHTML = `
     <div class="detail-thumb">${thumb}</div>
     <div class="detail-title">${escHtml(bm.title || "Untitled")}</div>
-    <div class="detail-url" data-url="${escAttr(bm.url)}">${escHtml(bm.url)}</div>
-    <div class="detail-field">
+<div class="detail-url" data-url="${escAttr(bm.url)}" style="display:flex;align-items:center;">
+  ${faviconHtml(bm)} 
+  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(bm.url)}</span>
+</div>    <div class="detail-field">
       <div class="detail-field-label">Vault</div>
       <div class="detail-field-value">📁 ${escHtml(bm.vault || "default")}</div>
     </div>
@@ -1817,7 +1839,9 @@ async function confirmNewBookmark() {
       tags,
       created_at: new Date().toISOString(),
       archived: doArchive,
+      html_path: doArchive ? "ready" : null,
       screenshot: !!fetchedOgImage,
+      favicon_path: "ready", // <--- ADD THIS LINE
     };
     
     allBookmarks.unshift(newBm);
@@ -1828,7 +1852,56 @@ async function confirmNewBookmark() {
     toast(`🔖 Bookmark saved successfully`);
   } catch { toast("❌ Failed to save bookmark"); }
 }
-// ── Retroactive Archiving ─────────────────────────────────────────────────────
+// ── Background Syncing (Window Focus Trick) ───────────────────────────────────
+async function silentRefresh() {
+  // Don't interrupt the user if they are dragging or typing in a modal
+  if (dragIds.size > 0 || dragFolderIds.size > 0) return;
+  if (document.getElementById("newBookmarkOverlay").classList.contains("open")) return;
+  if (document.getElementById("newFolderOverlay").classList.contains("open")) return;
+  if (document.getElementById("folderPickerOverlay").classList.contains("open")) return;
+  if (document.getElementById("bulkFetchOverlay").classList.contains("open")) return;
 
+  try {
+    // 1. Fetch latest bookmarks and vaults simultaneously
+    const [bmRes, vaultRes] = await Promise.all([
+      fetch(`${API}/recent?limit=500`),
+      fetch(`${API}/vaults`)
+    ]);
+
+    if (!bmRes.ok || !vaultRes.ok) return;
+
+    const bmData = await bmRes.json();
+    const vaultData = await vaultRes.json();
+
+    // 2. Update local state
+    allBookmarks = bmData.bookmarks || [];
+    vaults = vaultData.vaults || [];
+
+    // 3. Update UI seamlessly (retains your current filter and sort!)
+    updateStats();
+    render(); 
+    await renderSidebar(); // Automatically remembers which folders you had collapsed
+    updateBulkBar(); 
+
+    // 4. If the Detail Panel is currently open, refresh it so new badges appear
+    const detailOverlay = document.getElementById("detailOverlay");
+    if (detailOverlay.classList.contains("open")) {
+      const deleteBtn = document.querySelector('#detailFooter [data-action="delete"]');
+      if (deleteBtn && deleteBtn.dataset.bid) {
+        const updatedBm = allBookmarks.find(b => b.id === deleteBtn.dataset.bid);
+        if (updatedBm) {
+          openDetail(updatedBm); // Redraws it in place
+        } else {
+          closeDetail(); // Closes it if you deleted it from the popup
+        }
+      }
+    }
+  } catch (e) {
+    // Silently ignore network errors if backend is temporarily unreachable
+  }
+}
+
+// Trigger silent refresh every time the dashboard tab regains focus
+window.addEventListener("focus", silentRefresh);
 // ── Go ────────────────────────────────────────────────────────────────────────
 boot();

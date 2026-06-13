@@ -158,8 +158,10 @@ function fnavWireEvents() {
 
   el("fnavCreateOk").addEventListener("click", fnavCreateFolder);
 
+  // UPDATED: Now falls back to your active folder instead of Root
   el("fnavDestClear").addEventListener("click", () => {
-    fnavSelected = null;
+    const cur = fnavStack[fnavStack.length - 1];
+    fnavSelected = { id: cur.id, name: cur.name };
     fnavRenderDestination();
     fnavRenderList();
     fnavRenderSelectCurrent();
@@ -189,6 +191,10 @@ async function fnavNavigateTo(folder_id, folder_name) {
     if (top.id !== folder_id) fnavStack.push({ id: folder_id, name: folder_name });
   }
 
+  // MAGIC AUTO-SELECT: Whenever you move, automatically select your current location
+  const cur = fnavStack[fnavStack.length - 1];
+  fnavSelected = { id: cur.id, name: cur.name };
+
   try {
     const params = new URLSearchParams({ vault });
     if (folder_id) params.set("folder_id", folder_id);
@@ -214,21 +220,33 @@ function fnavGoBack() {
 }
 
 function fnavRenderSelectCurrent() {
-  const inFolder = fnavStack.length > 1;
   const cur = fnavStack[fnavStack.length - 1];
   let btn = el("fnavSelectCurrent");
-  if (!inFolder) { if (btn) btn.remove(); return; }
+  
   if (!btn) {
     btn = document.createElement("button");
     btn.id = "fnavSelectCurrent";
-    btn.className = "fnav-new";
-    btn.style.cssText = "color:var(--blue);border-color:rgba(59,130,246,0.4)";
+    btn.className = "fnav-new"; // Reusing the clean styles from the "New Folder" button
     el("fnavBack").parentNode.insertBefore(btn, el("fnavNew"));
   }
-  const isSelected = fnavSelected?.id === cur.id;
-  btn.textContent = isSelected ? "✓ Selected" : "Select this folder";
-  btn.style.color = isSelected ? "var(--green)" : "var(--blue)";
-  btn.onclick = () => { fnavSelectFolder(cur); fnavRenderSelectCurrent(); };
+
+  const isHere = fnavSelected?.id === cur.id;
+
+  if (isHere) {
+    // We are safely targeting the folder we are standing in
+    btn.textContent = "✓ Saving here";
+    btn.style.color = "var(--green)";
+    btn.style.borderColor = "transparent";
+    btn.style.cursor = "default";
+    btn.onclick = null;
+  } else {
+    // We selected a subfolder, so this button becomes our escape hatch to revert
+    btn.textContent = `← Re-select ${cur.name}`;
+    btn.style.color = "var(--blue)";
+    btn.style.borderColor = "var(--blue)";
+    btn.style.cursor = "pointer";
+    btn.onclick = () => { fnavSelectFolder(cur); };
+  }
 }
 
 function fnavRenderBreadcrumb() {
@@ -266,30 +284,52 @@ function fnavRenderList() {
   for (const f of fnavCurrentItems) {
     const row = document.createElement("div");
     row.className = "fnav-row";
+    // Make the whole row behave like a button
+    row.style.cursor = "pointer";
+    
+    // NAVIGATION TRIGGER: Clicking anywhere in the row (except the select button)
+    row.addEventListener("click", (e) => {
+      // If the target is the select button, don't navigate
+      if (e.target.closest(".fnav-row-select")) return;
+      fnavNavigateTo(f.id, f.name);
+    });
+
     const icon = document.createElement("span");
     icon.className = "fnav-row-icon"; icon.textContent = "📁";
+    
     const name = document.createElement("span");
-    name.className = "fnav-row-name"; name.textContent = f.name;
-    name.title = f.name + " (double-click to open)";
-    name.addEventListener("click",    () => fnavSelectFolder(f));
-    name.addEventListener("dblclick", () => fnavNavigateTo(f.id, f.name));
-    const enter = document.createElement("span");
-    enter.className = "fnav-row-enter"; enter.textContent = "›";
-    enter.title = `Open ${f.name}`;
-    enter.addEventListener("click", () => fnavNavigateTo(f.id, f.name));
+    name.className = "fnav-row-name"; 
+    name.textContent = f.name;
+    
     const selBtn = document.createElement("button");
     selBtn.className = "fnav-row-select" + (fnavSelected?.id === f.id ? " selected" : "");
     selBtn.textContent = fnavSelected?.id === f.id ? "✓" : "Select";
-    selBtn.addEventListener("click", () => fnavSelectFolder(f));
-    row.append(icon, name, enter, selBtn);
+    
+    // We keep the listener here to explicitly handle the selection
+    selBtn.addEventListener("click", (e) => {
+      e.stopPropagation(); // Very important: stops the click from bubbling up to the row
+      fnavSelectFolder(f);
+    });
+    
+    row.append(icon, name, selBtn);
     list.appendChild(row);
   }
 }
 
 function fnavSelectFolder(f) {
-  fnavSelected = fnavSelected?.id === f.id ? null : { id: f.id, name: f.name };
+  const cur = fnavStack[fnavStack.length - 1];
+  
+  if (fnavSelected?.id === f.id) {
+    // Toggling OFF a subfolder reverts back to our physical location
+    fnavSelected = { id: cur.id, name: cur.name };
+  } else {
+    // Toggling ON selects the specific target
+    fnavSelected = { id: f.id, name: f.name };
+  }
+  
   fnavRenderList();
   fnavRenderDestination();
+  fnavRenderSelectCurrent();
 }
 
 function fnavRenderDestination() {
@@ -587,7 +627,7 @@ function expMakeBookmarkRow(bm, showFolder = false) {
   const row = document.createElement("div");
   row.className = "exp-row exp-bookmark";
 
-  // Thumbnail: favour screenshot, fall back to favicon, then generic icon
+  // 1. Thumbnail (Falls back to favicon if no screenshot)
   const thumb = document.createElement("div");
   thumb.className = "exp-thumb";
   if (bm.screenshot) {
@@ -595,11 +635,11 @@ function expMakeBookmarkRow(bm, showFolder = false) {
     img.src = `${API}/static/archive/${bm.id}.jpeg`;
     img.onerror = () => {
       thumb.innerHTML = "";
-      appendFaviconOrIcon(thumb, bm.favicon_url);
+      appendFaviconOrIcon(thumb, bm);
     };
     thumb.appendChild(img);
   } else {
-    appendFaviconOrIcon(thumb, bm.favicon_url);
+    appendFaviconOrIcon(thumb, bm);
   }
 
   const info = document.createElement("div");
@@ -608,8 +648,19 @@ function expMakeBookmarkRow(bm, showFolder = false) {
   const title = document.createElement("div");
   title.className = "exp-row-name"; title.textContent = bm.title || bm.url;
 
+  // 2. Build the URL row with the tiny Favicon injected next to it
   const url = document.createElement("div");
-  url.className = "exp-row-url"; url.textContent = bm.url;
+  url.className = "exp-row-url"; 
+  url.style.cssText = "display:flex;align-items:center;gap:6px;";
+  
+  let favHtml = `<span style="font-size:11px;opacity:0.7">🌐</span>`;
+  if (bm.favicon_path) {
+    favHtml = `<img src="${API}/static/favicons/${bm.id}.ico" style="width:12px;height:12px;object-fit:contain;border-radius:2px;" onerror="this.style.display='none'">`;
+  } else if (bm.favicon_url) {
+    favHtml = `<img src="${escHtml(bm.favicon_url)}" style="width:12px;height:12px;object-fit:contain;border-radius:2px;" onerror="this.style.display='none'">`;
+  }
+
+  url.innerHTML = `${favHtml}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(bm.url)}</span>`;
 
   const badges = document.createElement("div");
   badges.className = "exp-row-badges";
@@ -632,13 +683,24 @@ function expMakeBookmarkRow(bm, showFolder = false) {
   return row;
 }
 
-// Show favicon image if available, otherwise fall back to 🔖 text
-function appendFaviconOrIcon(container, faviconUrl) {
-  if (faviconUrl) {
+// Show local favicon if available, fallback to external URL, then fallback to 🔖 text
+function appendFaviconOrIcon(container, bm) {
+  if (bm.favicon_path || bm.favicon_url) {
     const img = document.createElement("img");
-    img.src = faviconUrl;
+    // Try the locally archived icon first, otherwise use the live web URL
+    img.src = bm.favicon_path ? `${API}/static/favicons/${bm.id}.ico` : bm.favicon_url;
     img.style.cssText = "width:20px;height:20px;object-fit:contain;border-radius:3px";
-    img.onerror = () => { container.innerHTML = ""; container.textContent = "🔖"; };
+    
+    img.onerror = () => {
+      // If the local file failed but we have a live URL, try the live URL
+      if (bm.favicon_path && bm.favicon_url && !img.src.includes(bm.favicon_url)) {
+        img.src = bm.favicon_url;
+      } else {
+        // If everything fails, show the default text icon
+        container.innerHTML = ""; 
+        container.textContent = "🔖";
+      }
+    };
     container.appendChild(img);
   } else {
     container.textContent = "🔖";
@@ -688,6 +750,7 @@ el("btnSave").addEventListener("click", async () => {
       type: "SAVE", tabId: currentTab.id, url: currentTab.url, title: currentTab.title,
       vault: el("vaultSelect").value, tags, archive: el("chkArchive").checked,
       notes: el("notesInput").value, folder_id,
+      favicon_url: currentTab.favIconUrl // <--- ADD THIS LINE
     });
 
     if (res.success) {
