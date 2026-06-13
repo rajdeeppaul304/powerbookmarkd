@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "PowerBookmark",
+  "version": "1.0.0",
+  "description": "Local-first bookmark archiver with screenshot + HTML capture",
+
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "<all_urls>"
+  ],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+ 
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PowerBookmark"
+  }
+}
+
+

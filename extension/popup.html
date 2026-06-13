@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PowerBookmark</title>
+  <style>
+    :root {
+      --bg:      #0f1117;
+      --bg2:     #1a1d27;
+      --bg3:     #232634;
+      --bg4:     #2a2d3e;
+      --border:  #2e3347;
+      --text:    #e2e8f0;
+      --text2:   #94a3b8;
+      --text3:   #5a6480;
+      --green:   #22c55e;
+      --blue:    #3b82f6;
+      --yellow:  #f59e0b;
+      --red:     #ef4444;
+      --purple:  #a855f7;
+      --radius:  8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 520px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 14px 16px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+    .logo { font-size: 20px; line-height: 1; }
+    .header-title { font-size: 15px; font-weight: 600; flex: 1; }
+    .status-chip {
+      padding: 3px 10px; border-radius: 99px;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+    }
+    .status-chip.unsaved  { background: #333;                      color: var(--text2); }
+    .status-chip.saved    { background: rgba(34,197,94,0.15);      color: var(--green); }
+    .status-chip.archived { background: rgba(59,130,246,0.15);     color: var(--blue);  }
+    .status-chip.error    { background: rgba(239,68,68,0.15);      color: var(--red);   }
+
+    .dashboard-link {
+      display: flex; align-items: center; gap: 4px;
+      padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 500;
+      color: var(--text2); background: var(--bg3); border: 1px solid var(--border);
+      cursor: pointer; white-space: nowrap; transition: all 0.15s;
+    }
+    .dashboard-link:hover { color: var(--text); border-color: var(--blue); }
+
+    /* ── Tabs ── */
+    .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg2); }
+    .tab {
+      flex: 1; padding: 8px 0; text-align: center;
+      font-size: 12px; font-weight: 500; color: var(--text2);
+      cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s;
+    }
+    .tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+    .tab:hover:not(.active) { color: var(--text); }
+
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* ── Shared inputs ── */
+    label {
+      display: block; font-size: 11px; font-weight: 500; color: var(--text2);
+      margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.6px;
+    }
+    input[type="text"], select, textarea {
+      width: 100%; background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); color: var(--text); font-size: 13px;
+      padding: 8px 10px; outline: none; transition: border-color 0.15s; font-family: inherit;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--blue); }
+    select option { background: var(--bg2); }
+    .field { margin-bottom: 10px; }
+
+    /* ════════════════════════════════════════════
+       SAVE PANEL
+    ════════════════════════════════════════════ */
+    .save-panel { padding: 14px 16px; }
+
+    .page-info {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px;
+    }
+    .page-title {
+      font-size: 13px; font-weight: 500; margin-bottom: 3px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .page-url {
+      font-size: 11px; color: var(--text2);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* ── Folder Navigator (save tab) ── */
+    .folder-nav {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+    }
+    .fnav-breadcrumb {
+      display: flex; align-items: center; padding: 7px 10px;
+      border-bottom: 1px solid var(--border); background: var(--bg3);
+      overflow-x: auto; scrollbar-width: none; min-height: 32px;
+    }
+    .fnav-breadcrumb::-webkit-scrollbar { display: none; }
+    .fnav-crumb {
+      font-size: 11px; color: var(--text2); cursor: pointer;
+      white-space: nowrap; padding: 2px 4px; border-radius: 4px;
+      transition: color 0.12s; flex-shrink: 0;
+    }
+    .fnav-crumb:hover { color: var(--text); }
+    .fnav-crumb.current { color: var(--text); font-weight: 600; cursor: default; }
+    .fnav-sep { font-size: 10px; color: var(--text3); padding: 0 2px; flex-shrink: 0; user-select: none; }
+
+    .fnav-toolbar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 8px; border-bottom: 1px solid var(--border);
+    }
+    .fnav-back {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 11px; color: var(--text2); background: none;
+      border: 1px solid transparent; border-radius: 5px;
+      padding: 4px 8px; cursor: pointer; transition: all 0.12s; font-family: inherit; font-weight: 500;
+    }
+    .fnav-back:hover { color: var(--text); border-color: var(--border); background: var(--bg3); }
+    .fnav-back:disabled { opacity: 0.3; cursor: default; }
+    .fnav-back:disabled:hover { color: var(--text2); border-color: transparent; background: none; }
+    .fnav-spacer { flex: 1; }
+    .fnav-new {
+      display: flex; align-items: center; gap: 4px;
+      font-size: 11px; color: var(--text2); background: none;
+      border: 1px solid var(--border); border-radius: 5px;
+      padding: 4px 8px; cursor: pointer; transition: all 0.12s; font-family: inherit; font-weight: 500;
+    }
+    .fnav-new:hover { color: var(--text); border-color: var(--blue); }
+
+    .fnav-create-wrap { display: none; flex: 1; gap: 5px; align-items: center; }
+    .fnav-create-wrap.show { display: flex; }
+    .fnav-create-wrap input { flex: 1; font-size: 12px; padding: 5px 8px; }
+    .fnav-create-ok {
+      flex-shrink: 0; background: var(--blue); border: none;
+      border-radius: 5px; color: white; font-size: 11px; font-weight: 600;
+      padding: 5px 9px; cursor: pointer; font-family: inherit;
+    }
+    .fnav-create-cancel {
+      flex-shrink: 0; background: var(--bg4); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text2); font-size: 11px;
+      padding: 5px 7px; cursor: pointer; font-family: inherit;
+    }
+
+    .fnav-list { max-height: 130px; overflow-y: auto; }
+    .fnav-empty { padding: 14px 12px; font-size: 11px; color: var(--text3); text-align: center; }
+
+    .fnav-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 10px; border-bottom: 1px solid var(--border); transition: background 0.1s;
+    }
+    .fnav-row:last-child { border-bottom: none; }
+    .fnav-row:hover { background: var(--bg3); }
+    .fnav-row-icon { font-size: 13px; flex-shrink: 0; }
+    .fnav-row-name {
+      flex: 1; font-size: 12px; color: var(--text); cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .fnav-row-name:hover { color: var(--blue); }
+    .fnav-row-enter {
+      flex-shrink: 0; font-size: 11px; color: var(--text3);
+      cursor: pointer; padding: 2px 5px; border-radius: 3px; transition: all 0.1s; user-select: none;
+    }
+    .fnav-row-enter:hover { color: var(--text); background: var(--bg4); }
+    .fnav-row-select {
+      flex-shrink: 0; font-size: 11px; font-weight: 600;
+      color: var(--blue); background: rgba(59,130,246,0.1);
+      border: 1px solid rgba(59,130,246,0.25); border-radius: 4px;
+      padding: 3px 8px; cursor: pointer; font-family: inherit; transition: all 0.12s;
+    }
+    .fnav-row-select:hover  { background: rgba(59,130,246,0.2); }
+    .fnav-row-select.selected { background: var(--blue); color: white; border-color: var(--blue); }
+
+    .fnav-destination {
+      display: flex; align-items: center; gap: 7px;
+      padding: 7px 10px; border-top: 1px solid var(--border); background: var(--bg3);
+    }
+    .fnav-dest-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text3); white-space: nowrap; }
+    .fnav-dest-value { font-size: 12px; color: var(--text); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .fnav-dest-clear {
+      flex-shrink: 0; font-size: 11px; color: var(--text3);
+      cursor: pointer; padding: 2px 5px; border-radius: 3px;
+      transition: all 0.1s; background: none; border: none; font-family: inherit;
+    }
+    .fnav-dest-clear:hover { color: var(--red); }
+
+    /* ── Toggles ── */
+    .toggles { display: flex; gap: 10px; margin-bottom: 12px; }
+    .toggle-item {
+      flex: 1; display: flex; align-items: center; gap: 6px;
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 7px 10px; cursor: pointer;
+      transition: all 0.15s; user-select: none;
+    }
+    .toggle-item.on { border-color: var(--blue); background: rgba(59,130,246,0.08); }
+    .toggle-item input { display: none; }
+    .toggle-icon  { font-size: 14px; }
+    .toggle-label { font-size: 12px; font-weight: 500; }
+
+    /* ── Buttons ── */
+    .btn-row { display: flex; gap: 8px; margin-top: 12px; }
+    button {
+      cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 600;
+      border: none; border-radius: var(--radius); padding: 9px 16px; transition: all 0.15s;
+    }
+    .btn-primary { flex: 1; background: var(--blue); color: white; }
+    .btn-primary:hover    { background: #2563eb; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-danger {
+      background: rgba(239,68,68,0.12); color: var(--red);
+      border: 1px solid rgba(239,68,68,0.25);
+    }
+    .btn-danger:hover { background: rgba(239,68,68,0.2); }
+
+    .duplicate-warning {
+      background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.3);
+      border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; display: none;
+    }
+    .duplicate-warning.show { display: block; }
+    .dup-title { font-weight: 600; color: var(--yellow); margin-bottom: 4px; }
+    .dup-text  { font-size: 12px; color: var(--text2); }
+
+    /* ════════════════════════════════════════════
+       EXPLORER PANEL
+    ════════════════════════════════════════════ */
+    .explorer-panel { display: flex; flex-direction: column; height: 480px; }
+
+    /* ── Search bar row ── */
+    .exp-search-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+    .exp-search-wrap {
+      flex: 1; position: relative;
+    }
+    .exp-search-wrap input {
+      width: 100%; padding: 7px 10px 7px 30px;
+      font-size: 12px;
+    }
+    .exp-search-icon {
+      position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+      font-size: 13px; color: var(--text3); pointer-events: none;
+    }
+
+    /* Local / Global search buttons */
+    .exp-scope-btn {
+      flex-shrink: 0;
+      font-size: 11px; font-weight: 600;
+      padding: 6px 11px; border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg3); color: var(--text2);
+      cursor: pointer; transition: all 0.15s; font-family: inherit;
+      white-space: nowrap;
+    }
+    .exp-scope-btn:hover { border-color: var(--blue); color: var(--text); }
+    .exp-scope-btn.active-scope {
+      background: rgba(59,130,246,0.15);
+      border-color: rgba(59,130,246,0.5);
+      color: var(--blue);
+    }
+
+    /* ── Breadcrumb + Back toolbar ── */
+    .exp-nav-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg3);
+      min-height: 34px;
+    }
+    .exp-back {
+      flex-shrink: 0;
+      font-size: 11px; font-weight: 600; color: var(--text2);
+      background: none; border: 1px solid transparent; border-radius: 5px;
+      padding: 3px 8px; cursor: pointer; transition: all 0.12s; font-family: inherit;
+    }
+    .exp-back:hover { color: var(--text); border-color: var(--border); background: var(--bg4); }
+    .exp-back:disabled { opacity: 0.3; cursor: default; }
+    .exp-back:disabled:hover { color: var(--text2); border-color: transparent; background: none; }
+
+    #expBreadcrumb {
+      flex: 1; display: flex; align-items: center;
+      overflow-x: auto; scrollbar-width: none; gap: 0;
+    }
+    #expBreadcrumb::-webkit-scrollbar { display: none; }
+
+    /* ── Contents area ── */
+    .exp-contents {
+      flex: 1; overflow-y: auto;
+    }
+
+    /* folder / bookmark rows */
+    .exp-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: background 0.1s;
+    }
+    .exp-row:last-child { border-bottom: none; }
+    .exp-row:hover { background: var(--bg3); }
+
+    /* folder rows */
+    .exp-folder .exp-row-icon { font-size: 18px; flex-shrink: 0; }
+    .exp-folder .exp-row-arrow {
+      flex-shrink: 0; font-size: 16px; color: var(--text3); margin-left: auto;
+      transition: color 0.1s;
+    }
+    .exp-folder:hover .exp-row-arrow { color: var(--text2); }
+
+    /* bookmark rows */
+    .exp-thumb {
+      width: 44px; height: 32px; border-radius: 5px;
+      background: var(--bg4); overflow: hidden; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; color: var(--text3);
+    }
+    .exp-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+    .exp-row-info { flex: 1; min-width: 0; }
+    .exp-row-name {
+      font-size: 12px; font-weight: 500; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin-bottom: 2px;
+    }
+    .exp-bookmark:hover .exp-row-name { color: var(--blue); }
+    .exp-row-meta { font-size: 11px; color: var(--text3); }
+    .exp-row-url  {
+      font-size: 11px; color: var(--text2);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin-bottom: 3px;
+    }
+    .exp-row-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+
+    /* search results header */
+    .exp-search-hdr {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 7px 14px; background: var(--bg3); border-bottom: 1px solid var(--border);
+    }
+    .exp-search-scope { font-size: 11px; font-weight: 600; color: var(--text2); }
+    .exp-search-count { font-size: 11px; color: var(--text3); }
+
+    .exp-empty { text-align: center; padding: 40px 20px; color: var(--text2); font-size: 12px; }
+    .exp-empty .empty-icon { font-size: 32px; margin-bottom: 10px; }
+
+    /* ── Shared badges ── */
+    .badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: var(--bg3); color: var(--text2); }
+    .badge.vault  { background: rgba(168,85,247,0.15); color: var(--purple); }
+    .badge.tag    { background: rgba(59,130,246,0.12); color: var(--blue); }
+    .badge.folder { background: rgba(245,158,11,0.12); color: var(--yellow); }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed; bottom: 12px; left: 50%;
+      transform: translateX(-50%) translateY(60px);
+      background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+      padding: 8px 16px; border-radius: 99px; font-size: 12px; font-weight: 500;
+      white-space: nowrap; transition: transform 0.25s; z-index: 999;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .offline-banner {
+      background: rgba(239,68,68,0.1); border-bottom: 1px solid rgba(239,68,68,0.25);
+      padding: 8px 16px; font-size: 11px; color: var(--red); display: none; text-align: center;
+    }
+    .offline-banner.show { display: block; }
+  </style>
+</head>
+<body>
+
+<div class="offline-banner" id="offlineBanner">
+  ⚠ powerbookmarkd not running — start it first
+</div>
+
+<div class="header">
+  <span class="logo">🔖</span>
+  <span class="header-title">PowerBookmark</span>
+  <span class="status-chip unsaved" id="statusChip">Not Saved</span>
+  <button class="dashboard-link" id="openDashboard">⊞ Dashboard</button>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="save">Save</div>
+  <div class="tab" data-tab="explorer">Explorer</div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     SAVE PANEL
+════════════════════════════════════════════ -->
+<div class="panel active" id="panel-save">
+  <div class="save-panel">
+
+    <div class="page-info">
+      <div class="page-title" id="pageTitle">Loading…</div>
+      <div class="page-url"   id="pageUrl"></div>
+    </div>
+
+    <div class="duplicate-warning" id="dupWarning">
+      <div class="dup-title">⚠ Already saved</div>
+      <div class="dup-text">This URL exists in your bookmarks. Saving will update it.</div>
+    </div>
+
+    <div class="field">
+      <label>Vault</label>
+      <select id="vaultSelect">
+        <option value="default">📁 default</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>Folder</label>
+      <div class="folder-nav" id="folderNav">
+        <div class="fnav-breadcrumb" id="fnavBreadcrumb"></div>
+        <div class="fnav-toolbar">
+          <button class="fnav-back" id="fnavBack" disabled>← Back</button>
+          <div class="fnav-spacer"></div>
+          <button class="fnav-new" id="fnavNew">＋ New folder</button>
+          <div class="fnav-create-wrap" id="fnavCreateWrap">
+            <input type="text" id="fnavNameInput" placeholder="Folder name…" maxlength="80">
+            <button class="fnav-create-ok"     id="fnavCreateOk">Add</button>
+            <button class="fnav-create-cancel" id="fnavCreateCancel">✕</button>
+          </div>
+        </div>
+        <div class="fnav-list" id="fnavList"></div>
+        <div class="fnav-destination">
+          <span class="fnav-dest-label">Save to:</span>
+          <span class="fnav-dest-value" id="fnavDestValue">📂 Root</span>
+          <button class="fnav-dest-clear" id="fnavDestClear" title="Reset to Root">✕</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Tags (comma separated)</label>
+      <input type="text" id="tagsInput" placeholder="e.g. linux, wayland, kde">
+    </div>
+
+    <div class="field">
+      <label>Notes</label>
+      <textarea id="notesInput" rows="2" placeholder="Optional note…" style="resize:vertical;min-height:50px"></textarea>
+    </div>
+
+    <div class="toggles">
+      <div class="toggle-item on" id="toggleScreenshot">
+        <input type="checkbox" id="chkScreenshot" checked>
+        <span class="toggle-icon">📸</span>
+        <span class="toggle-label">Screenshot</span>
+      </div>
+      <div class="toggle-item" id="toggleArchive">
+        <input type="checkbox" id="chkArchive">
+        <span class="toggle-icon">📦</span>
+        <span class="toggle-label">Archive HTML</span>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn-danger"  id="btnDelete" style="display:none">Delete</button>
+      <button class="btn-primary" id="btnSave">Save Bookmark</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     EXPLORER PANEL
+════════════════════════════════════════════ -->
+<div class="panel" id="panel-explorer">
+  <div class="explorer-panel">
+
+    <!-- Search bar with Local / Global buttons -->
+    <div class="exp-search-bar">
+      <div class="exp-search-wrap">
+        <span class="exp-search-icon">🔍</span>
+        <input type="text" id="expSearchInput" placeholder="Search… (Enter = local)">
+      </div>
+      <button class="exp-scope-btn" id="btnSearchLocal"  title="Search this folder &amp; subfolders">Local</button>
+      <button class="exp-scope-btn" id="btnSearchGlobal" title="Search all vaults">Global</button>
+    </div>
+
+    <!-- Breadcrumb nav bar -->
+    <div class="exp-nav-bar">
+      <button class="exp-back fnav-back" id="expBack" disabled>← Back</button>
+      <div class="fnav-breadcrumb" id="expBreadcrumb" style="background:transparent;border:none;padding:0"></div>
+    </div>
+
+    <!-- Folder + bookmark contents -->
+    <div class="exp-contents" id="expContents">
+      <div class="exp-empty">
+        <div class="empty-icon">📂</div>
+        Open Explorer to browse your bookmarks
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="popup.js"></script>
+</body>
+</html>
