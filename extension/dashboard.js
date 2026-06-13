@@ -1,4 +1,4 @@
-// dashboard.js — PowerBookmark Dashboard v1.6
+// dashboard.js — PowerBookmark Dashboard v1.7
 "use strict";
 const API = "http://127.0.0.1:8765";
 
@@ -14,20 +14,37 @@ let searchQuery = "";
 let folderMap = {};   // id → { id, name, parent_id, vault, depth }
 let folderCollapsed = {};
 
+// ordered items cache: folder_id (or "__root__") → ordered_items array
+// Used only in list view to render the interleaved sorted list.
+let orderedItemsCache = {};
+
 // selection state — bookmarks AND subfolders
-let selectedIds = new Set();   // bookmark ids
-let selectedFolderIds = new Set();   // subfolder ids (for bulk move/copy)
+let selectedIds = new Set();
+let selectedFolderIds = new Set();
 let lastClickedIdx = -1;
 
-// drag state
+// drag state — folder-move drag (existing behavior)
 let dragIds = new Set();
 let dragFolderIds = new Set();
 let targetFetchIds = [];
+
+// reorder drag state (list-view grip handle drag)
+let reorderDrag = {
+  active: false,
+  itemId: null,
+  itemType: null,      // 'bookmark' | 'folder'
+  sourceEl: null,
+  indicatorEl: null,   // the blue line element
+  overItemId: null,
+  overItemType: null,
+  overPosition: null,  // 'before' | 'after'
+};
+
 // sidebar section collapse state
 const sectionCollapsed = { vaults: false, folders: false, tags: false };
 
 // folder picker callback
-let folderPickerMode = null;   // "move" | "copy"
+let folderPickerMode = null;
 let folderPickerSelId = null;
 
 // ── Custom drag ghost ─────────────────────────────────────────────────────────
@@ -114,6 +131,83 @@ function removeDragGhost() {
   if (ghostEl) { ghostEl.remove(); ghostEl = null; }
 }
 
+// ── Reorder drop indicator (blue line) ───────────────────────────────────────
+function getOrCreateIndicator() {
+  const container = document.getElementById("bookmarksContainer");
+  let el = document.getElementById("reorder-indicator");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "reorder-indicator";
+    el.style.cssText = `
+      position: absolute;
+      left: 0; right: 0;
+      height: 2px;
+      background: var(--blue);
+      border-radius: 2px;
+      pointer-events: none;
+      z-index: 50;
+      box-shadow: 0 0 6px rgba(59,130,246,0.6);
+      display: none;
+    `;
+    container.appendChild(el);
+  }
+  reorderDrag.indicatorEl = el;
+  return el;
+}
+
+
+function showIndicator(referenceEl, position) {
+  const indicator = getOrCreateIndicator();
+  const container = document.getElementById("bookmarksContainer");
+  const containerRect = container.getBoundingClientRect();
+  const refRect = referenceEl.getBoundingClientRect();
+
+  const top = position === "before"
+    ? refRect.top - containerRect.top + container.scrollTop - 1
+    : refRect.bottom - containerRect.top + container.scrollTop - 1;
+
+  indicator.style.top = top + "px";
+  indicator.style.display = "block";
+}
+
+function hideIndicator() {
+  if (reorderDrag.indicatorEl) {
+    reorderDrag.indicatorEl.style.display = "none";
+  }
+}
+
+// ── Ordered items cache helpers ───────────────────────────────────────────────
+function getCacheKey(filter) {
+  if (filter.type === "folder") return filter.value || "__root__";
+  return "__root__";
+}
+
+function getOrderedItemsForCurrentView() {
+  if (currentFilter.type !== "folder" && currentFilter.type !== "all") return null;
+  const key = getCacheKey(currentFilter);
+  return orderedItemsCache[key] || null;
+}
+
+function setOrderedItemsCache(folderId, items) {
+  const key = folderId || "__root__";
+  orderedItemsCache[key] = items;
+}
+
+async function fetchOrderedContents(folderId, vault) {
+  const params = new URLSearchParams({ vault: vault || "default" });
+  if (folderId) params.set("folder_id", folderId);
+  try {
+    const res = await fetch(`${API}/contents?${params}`);
+    const data = await res.json();
+    if (data.ordered_items) {
+      setOrderedItemsCache(folderId, data.ordered_items);
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 // ── Boot ─────────────────────────────────────────────────────────────────────
 async function boot() {
   await Promise.all([loadVaults(), loadAll()]);
@@ -172,9 +266,10 @@ function applySectionCollapse(key) {
 // ── Static control bindings ───────────────────────────────────────────────────
 function bindStaticControls() {
   document.querySelectorAll(".sort-btn").forEach(btn => {
+    if (!btn.dataset.sort) return; // skip + Folder / + Bookmark buttons
     btn.addEventListener("click", () => {
       currentSort = btn.dataset.sort;
-      document.querySelectorAll(".sort-btn").forEach(b => b.classList.remove("active"));
+      document.querySelectorAll(".sort-btn[data-sort]").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       render();
     });
@@ -197,17 +292,26 @@ function bindStaticControls() {
   });
 
   document.getElementById("viewGrid").addEventListener("click", () => {
-    currentView = "grid";
-    document.getElementById("viewGrid").classList.add("active");
-    document.getElementById("viewList").classList.remove("active");
-    render();
+  currentView = "grid";
+  document.getElementById("viewGrid").classList.add("active");
+  document.getElementById("viewList").classList.remove("active");
+  document.querySelectorAll(".sort-btn[data-sort]").forEach(b => {
+    b.style.opacity = "";
+    b.style.pointerEvents = "";
   });
-  document.getElementById("viewList").addEventListener("click", () => {
-    currentView = "list";
-    document.getElementById("viewList").classList.add("active");
-    document.getElementById("viewGrid").classList.remove("active");
-    render();
+  render();
+});
+document.getElementById("viewList").addEventListener("click", async () => {
+  currentView = "list";
+  document.getElementById("viewList").classList.add("active");
+  document.getElementById("viewGrid").classList.remove("active");
+  document.querySelectorAll(".sort-btn[data-sort]").forEach(b => {
+    b.style.opacity = "0.35";
+    b.style.pointerEvents = "none";
   });
+  await ensureOrderedItems();
+  render();
+});
 
   document.getElementById("searchInput").addEventListener("input", (e) => {
     clearTimeout(searchTimer);
@@ -219,25 +323,22 @@ function bindStaticControls() {
   document.getElementById("bulkMove").addEventListener("click", () => openFolderPicker("move"));
   document.getElementById("bulkCopy").addEventListener("click", () => openFolderPicker("copy"));
   document.getElementById("bulkTag").addEventListener("click", openBulkTagModal);
-// Open the modal and ensure archive is unchecked by default
-document.getElementById("bulkFetch").addEventListener("click", () => {
-    targetFetchIds = [...selectedIds]; // Grab all selected IDs
-    document.getElementById("bulkFetchArchiveCheck").checked = false; 
+
+  document.getElementById("bulkFetch").addEventListener("click", () => {
+    targetFetchIds = [...selectedIds];
+    document.getElementById("bulkFetchArchiveCheck").checked = false;
     document.getElementById("bulkFetchTitle").textContent = `Bulk Fetch (${targetFetchIds.length})`;
     document.getElementById("bulkFetchOverlay").classList.add("open");
   });
-  
-  // Close the modal
+
   document.getElementById("bulkFetchClose").addEventListener("click", () => {
     document.getElementById("bulkFetchOverlay").classList.remove("open");
   });
   document.getElementById("bulkFetchCancel").addEventListener("click", () => {
     document.getElementById("bulkFetchOverlay").classList.remove("open");
   });
-  
-  // Confirm the fetch
-  document.getElementById("bulkFetchConfirm").addEventListener("click", executeBulkFetch);
 
+  document.getElementById("bulkFetchConfirm").addEventListener("click", executeBulkFetch);
   document.getElementById("bulkDelete").addEventListener("click", bulkDeleteSelected);
 
   document.addEventListener("keydown", (e) => {
@@ -274,7 +375,6 @@ document.getElementById("bulkFetch").addEventListener("click", () => {
   document.getElementById("bulkTagCancel").addEventListener("click", closeBulkTagModal);
   document.getElementById("bulkTagConfirm").addEventListener("click", applyBulkTag);
 
-  // New folder buttons (main pane + sidebar)
   document.getElementById("newFolderBtnMain").addEventListener("click", openNewFolderModal);
   document.getElementById("newFolderBtnSidebar").addEventListener("click", openNewFolderModal);
   document.getElementById("newFolderClose").addEventListener("click", closeNewFolderModal);
@@ -285,7 +385,6 @@ document.getElementById("bulkFetch").addEventListener("click", () => {
     if (e.key === "Escape") closeNewFolderModal();
   });
 
-  // New bookmark buttons (main pane + sidebar)
   document.getElementById("newBookmarkBtnMain").addEventListener("click", openNewBookmarkModal);
   document.getElementById("newBookmarkBtnSidebar").addEventListener("click", openNewBookmarkModal);
   document.getElementById("newBookmarkClose").addEventListener("click", closeNewBookmarkModal);
@@ -295,6 +394,22 @@ document.getElementById("bulkFetch").addEventListener("click", () => {
   document.getElementById("newBookmarkUrl").addEventListener("keydown", (e) => {
     if (e.key === "Enter") fetchBookmarkMeta();
   });
+}
+
+// ── Ensure ordered items are loaded for list view ─────────────────────────────
+async function ensureOrderedItems() {
+  if (currentView !== "list") return;
+  if (searchQuery) return; // search results don't use order
+
+  const folderId = currentFilter.type === "folder" ? currentFilter.value : null;
+  const vault = currentFilter.type === "vault"
+    ? currentFilter.value
+    : (vaults[0]?.name || "default");
+
+  // Only fetch if we're in a folder or root context
+  if (currentFilter.type !== "folder" && currentFilter.type !== "all") return;
+
+  await fetchOrderedContents(folderId, vault);
 }
 
 // ── Folder tree helpers ───────────────────────────────────────────────────────
@@ -354,7 +469,7 @@ function flatFolderList() {
   return result;
 }
 
-// ── Breadcrumb: get ancestors for a folder id ─────────────────────────────────
+// ── Breadcrumb ────────────────────────────────────────────────────────────────
 function getFolderAncestors(folderId) {
   const chain = [];
   let current = folderMap[folderId];
@@ -365,7 +480,7 @@ function getFolderAncestors(folderId) {
     chain.unshift(current);
     current = current.parent_id ? folderMap[current.parent_id] : null;
   }
-  return chain; // root → folder
+  return chain;
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
@@ -516,12 +631,13 @@ function bindSidebarClicks() {
         bindSidebarClicks();
         bindSidebarDragTargets();
       }
+      if (currentView === "list") await ensureOrderedItems();
       render();
     });
   });
 
   document.querySelectorAll(".folder-tree-row").forEach(row => {
-    row.addEventListener("click", (e) => {
+    row.addEventListener("click", async (e) => {
       if (e.target.closest("[data-toggle-folder]")) return;
       document.querySelectorAll(".sidebar-item, .folder-tree-row").forEach(i => i.classList.remove("active"));
       row.classList.add("active");
@@ -529,6 +645,7 @@ function bindSidebarClicks() {
       searchQuery = "";
       document.getElementById("searchInput").value = "";
       clearSelection();
+      if (currentView === "list") await ensureOrderedItems();
       render();
     });
   });
@@ -560,7 +677,6 @@ function bindSidebarDragTargets() {
         return;
       }
 
-      // Capture IDs before any async render clears state
       const bmIds = [...dragIds];
       const folIds = [...dragFolderIds];
       dragIds.clear();
@@ -623,6 +739,16 @@ async function executeMoveFolder(folderId, newParentId) {
     });
     if (!res.ok) throw new Error();
     if (folderMap[folderId]) folderMap[folderId].parent_id = newParentId;
+
+    // ── ADD THESE 4 LINES ──
+    const srcKey = currentFilter.type === "folder" ? currentFilter.value || "__root__" : "__root__";
+    if (orderedItemsCache[srcKey]) {
+      orderedItemsCache[srcKey] = orderedItemsCache[srcKey].filter(
+        i => !((i.id || i.item_id) === folderId && i.item_type === "folder")
+      );
+    }
+    // ──────────────────────
+
     await renderSidebar();
     render();
     toast(`✦ Folder moved`);
@@ -666,15 +792,10 @@ function getVisibleSubfolders() {
 }
 
 // ── Breadcrumb HTML ───────────────────────────────────────────────────────────
-// FIX: Show breadcrumb even when inside a first-level (root-child) folder.
-// Old code returned "" when ancestors.length <= 1, hiding the breadcrumb
-// for folders directly under root. Now we show it whenever we're in any folder.
 function renderBreadcrumb() {
   if (currentFilter.type !== "folder" || !currentFilter.value) return "";
 
   const ancestors = getFolderAncestors(currentFilter.value);
-  // ancestors includes the current folder itself as the last element.
-  // Always render the breadcrumb — even if we're at depth 1 (root child).
 
   const parts = [
     `<span class="breadcrumb-seg" data-breadcrumb-root style="cursor:pointer">🗂 Root</span>`
@@ -696,29 +817,105 @@ function bindBreadcrumbClicks() {
   const bar = document.getElementById("breadcrumbBar");
   if (!bar) return;
 
-  bar.querySelector("[data-breadcrumb-root]")?.addEventListener("click", () => {
+  bar.querySelector("[data-breadcrumb-root]")?.addEventListener("click", async () => {
     currentFilter = { type: "all", value: null };
     document.querySelectorAll(".sidebar-item, .folder-tree-row").forEach(i => i.classList.remove("active"));
     document.querySelector('.sidebar-item[data-filter="all"]')?.classList.add("active");
     clearSelection();
+    if (currentView === "list") await ensureOrderedItems();
     render();
   });
 
   bar.querySelectorAll("[data-breadcrumb-folder]").forEach(el => {
-    el.addEventListener("click", () => {
+    el.addEventListener("click", async () => {
       const fid = el.dataset.breadcrumbFolder;
-      setFolderFilter(fid);
+      await setFolderFilter(fid);
     });
   });
 }
 
+// ── render ────────────────────────────────────────────────────────────────────
 function render() {
   const items = getFiltered();
   updateMainHeader(items.length);
   const container = document.getElementById("bookmarksContainer");
+  container.style.position = "relative"; // needed for absolute indicator positioning
 
-  const subfolderCards = getVisibleSubfolders().sort((a, b) => a.name.localeCompare(b.name));
   const breadcrumbHtml = renderBreadcrumb();
+
+  // ── LIST VIEW: use ordered_items from server ──
+  if (currentView === "list" && !searchQuery &&
+    (currentFilter.type === "folder" || currentFilter.type === "all")) {
+
+    const folderId = currentFilter.type === "folder" ? currentFilter.value : null;
+    const cacheKey = folderId || "__root__";
+    const orderedItems = orderedItemsCache[cacheKey];
+
+    if (orderedItems) {
+      // Merge server order with local allBookmarks (for up-to-date tag/title data)
+      const bmLookup = {};
+      allBookmarks.forEach(b => { bmLookup[b.id] = b; });
+
+      const resolvedItems = orderedItems
+        .map(item => {
+          if (item.item_type === "bookmark") {
+            const live = bmLookup[item.id || item.item_id];
+            if (!live) return null;
+            // Filter by current filter constraints
+            if (currentFilter.type === "folder" && live.folder_id !== currentFilter.value) return null;
+            return { ...live, item_type: "bookmark", position: item.position };
+          } else {
+            const folder = folderMap[item.id || item.item_id];
+            if (!folder) return null;
+            return { ...folder, item_type: "folder", position: item.position };
+          }
+        })
+        .filter(Boolean);
+
+      // Add any items not yet in orderedItems (new bookmarks/folders)
+      const orderedIds = new Set(orderedItems.map(i => i.id || i.item_id));
+
+      if (currentFilter.type === "folder") {
+        allBookmarks
+          .filter(b => b.folder_id === currentFilter.value && !orderedIds.has(b.id))
+          .forEach(b => resolvedItems.push({ ...b, item_type: "bookmark", position: Infinity }));
+        Object.values(folderMap)
+          .filter(f => f.parent_id === currentFilter.value && !orderedIds.has(f.id))
+          .forEach(f => resolvedItems.push({ ...f, item_type: "folder", position: Infinity }));
+      }
+
+      if (!resolvedItems.length) {
+        container.innerHTML = breadcrumbHtml + `
+          <div class="empty-state">
+            <div class="empty-icon">🔍</div>
+            <div class="empty-title">Nothing here</div>
+            <div class="empty-sub">Save a bookmark or create a folder to get started</div>
+          </div>`;
+        bindBreadcrumbClicks();
+        return;
+      }
+
+      container.innerHTML = breadcrumbHtml +
+        `<div class="bookmarks-list" id="orderedList">${resolvedItems.map((item, idx) => {
+          if (item.item_type === "folder") return folderRowHtml(item, idx);
+          return rowHtml(item, idx);
+        }).join("")}</div>`;
+
+      bindBreadcrumbClicks();
+      bindOrderedListInteractions(resolvedItems);
+      bindBookmarkRowActions();
+      return;
+    }
+    // If no cache yet, fall through to normal render and trigger a fetch
+    fetchOrderedContents(
+      currentFilter.type === "folder" ? currentFilter.value : null,
+      vaults[0]?.name || "default"
+    ).then(() => render());
+    return;
+  }
+
+  // ── GRID VIEW or search/filtered views ──
+  const subfolderCards = getVisibleSubfolders().sort((a, b) => a.name.localeCompare(b.name));
 
   const subfolderHtml = subfolderCards.length
     ? `<div style="margin-bottom:16px">
@@ -762,160 +959,314 @@ function render() {
 
   container.innerHTML = breadcrumbHtml + subfolderHtml + bookmarksHtml;
   bindBreadcrumbClicks();
+  bindSubfolderCards();
+  bindBookmarkCards();
+  bindBookmarkRowActions();
+}
 
-  // ── Subfolder card interaction ──
-  container.querySelectorAll(".subfolder-card").forEach(card => {
+// ── Bind interactions for the ordered interleaved list ────────────────────────
+function bindOrderedListInteractions(resolvedItems) {
+  const list = document.getElementById("orderedList");
+  if (!list) return;
+
+  // Track whether the current drag started from a grip handle
+  let dragFromHandle = false;
+
+  // ── Subfolder row interactions ──
+  list.querySelectorAll("[data-fid]").forEach(card => {
     const fid = card.dataset.fid;
 
-    // Single click: toggle selection (or select if nothing selected)
     card.addEventListener("click", (e) => {
-      const isCheckbox = e.target.closest(".subfolder-checkbox");
-      if (isCheckbox || e.shiftKey || e.metaKey || e.ctrlKey ||
-        selectedIds.size > 0 || selectedFolderIds.size > 0) {
-        e.preventDefault();
-        if (selectedFolderIds.has(fid)) {
-          selectedFolderIds.delete(fid);
-        } else {
-          selectedFolderIds.add(fid);
-        }
-        updateBulkBar();
-        render();
-      }
-      // single click with nothing selected does nothing — wait for dblclick
-    });
+  if (e.target.closest(".action-btn")) return;
+  e.preventDefault();
+  if (selectedFolderIds.has(fid)) selectedFolderIds.delete(fid);
+  else selectedFolderIds.add(fid);
+  updateBulkBar();
+  render();
+});
 
-    // Double click: navigate into folder
-    card.addEventListener("dblclick", (e) => {
-      if (e.target.closest(".subfolder-checkbox")) return;
-      document.querySelectorAll(".sidebar-item, .folder-tree-row").forEach(i =>
-        i.classList.toggle("active", i.dataset.filter === "folder" && i.dataset.value === fid));
-      currentFilter = { type: "folder", value: fid };
-      clearSelection();
-      render();
-    });
+card.addEventListener("dblclick", async (e) => {
+  if (e.target.closest(".action-btn")) return;
+  selectedFolderIds.delete(fid);
+  updateBulkBar();
+  document.querySelectorAll(".sidebar-item, .folder-tree-row").forEach(i =>
+    i.classList.toggle("active", i.dataset.filter === "folder" && i.dataset.value === fid));
+  currentFilter = { type: "folder", value: fid };
+  clearSelection();
+  await ensureOrderedItems();
+  render();
+});
 
-    // FIX (drag lag): removed e.stopPropagation() from dragover on subfolder cards.
-    // The old stopPropagation() fought with the container's dragover handler on every
-    // mouse-move event during drag, causing a reflow stutter. Drop still works because
-    // we stopPropagation() only on the 'drop' event itself to prevent double-handling.
-    card.addEventListener("dragover", (e) => {
-      if (!dragIds.size && !dragFolderIds.size) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      card.classList.add("drag-over");
-    });
-    card.addEventListener("dragleave", (e) => {
-      if (!card.contains(e.relatedTarget)) card.classList.remove("drag-over");
-    });
-    card.addEventListener("drop", async (e) => {
-      e.preventDefault();
-      e.stopPropagation(); // only stop propagation on drop, not dragover
-      card.classList.remove("drag-over");
-
-      const droppingFolderIntoItself = dragFolderIds.has(fid);
-
-      // Capture before async clears state
-      const bmIds = [...dragIds];
-      const folIds = [...dragFolderIds].filter(id => id !== fid);
-      dragIds.clear();
-      dragFolderIds.clear();
-
-      if (bmIds.length) await executeBulkMove(bmIds, fid);
-      if (folIds.length) await executeBulkMoveFolders(folIds, fid);
-      if (droppingFolderIntoItself && folIds.length < dragFolderIds.size) {
-        toast("❌ Can't move a folder into itself");
-      }
-
-      removeDragGhost();
-    });
-
-    // ── Subfolder card DRAG SOURCE ──
-    card.addEventListener("dragstart", (e) => {
-      if (selectedFolderIds.has(fid)) {
-        dragFolderIds = new Set(selectedFolderIds);
-        if (selectedIds.size) dragIds = new Set(selectedIds);
-      } else {
-        dragFolderIds = new Set([fid]);
-        dragIds = new Set();
-      }
-
-      createDragGhost(dragIds, dragFolderIds);
-      const blank = new Image();
-      blank.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
-      e.dataTransfer.setDragImage(blank, 0, 0);
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", fid);
-      requestAnimationFrame(() => card.classList.add("dragging"));
-    });
-    card.addEventListener("dragend", () => {
-      card.classList.remove("dragging");
-      dragFolderIds.clear();
-      dragIds.clear();
-      removeDragGhost();
-    });
   });
 
-  // ── Bookmark card/row interaction ──
-  container.querySelectorAll("[data-bid]").forEach((el, idx) => {
+  // ── Bookmark row click → open detail ──
+  list.querySelectorAll("[data-bid]").forEach((el, idx) => {
     el.addEventListener("click", (e) => {
-      if (e.target.closest(".card-action-btn, .action-btn, [data-filter-folder]")) return;
+  if (e.target.closest(".action-btn, [data-filter-folder]")) return;
+  e.preventDefault();
+  handleSelectionClick(el.dataset.bid, idx, e.shiftKey,
+    resolvedItems.filter(i => i.item_type === "bookmark"));
+});
 
-      const isCheckbox = e.target.closest(".card-checkbox, .row-checkbox");
-      if (isCheckbox || e.shiftKey || e.metaKey || e.ctrlKey ||
-        selectedIds.size > 0 || selectedFolderIds.size > 0) {
+el.addEventListener("dblclick", (e) => {
+  if (e.target.closest(".action-btn, [data-filter-folder]")) return;
+  // Double click — deselect and open detail
+  selectedIds.delete(el.dataset.bid);
+  updateBulkBar();
+  const bm = allBookmarks.find(b => b.id === el.dataset.bid);
+  if (bm) openDetail(bm);
+});
+  });
+
+  // ── Drag logic for all rows (both [data-bid] and [data-fid]) ──
+  list.querySelectorAll("[data-bid], [data-fid]").forEach(row => {
+    row.setAttribute("draggable", "true");
+
+    // Mark drag-from-handle when mousedown fires on the handle
+    const handle = row.querySelector(".reorder-handle");
+    if (handle) {
+      handle.addEventListener("mousedown", () => { dragFromHandle = true; });
+    }
+    // Clear the flag if mouseup fires without a dragstart (plain click)
+    row.addEventListener("mouseup", () => { dragFromHandle = false; });
+
+    row.addEventListener("dragstart", (e) => {
+      // Prevent drag from action buttons / checkboxes
+      if (e.target.closest(".action-btn, .row-checkbox, .subfolder-checkbox, [data-filter-folder]")) {
         e.preventDefault();
-        handleSelectionClick(el.dataset.bid, idx, e.shiftKey, items);
+        dragFromHandle = false;
         return;
       }
-      const bm = allBookmarks.find(b => b.id === el.dataset.bid);
-      if (bm) openDetail(bm);
-    });
 
-    el.setAttribute("draggable", "true");
+      if (dragFromHandle) {
+        // ── REORDER drag ──
+        dragFromHandle = false;
+        e.stopPropagation();
 
-    el.addEventListener("dragstart", (e) => {
-      if (e.target.closest(".card-action-btn, .action-btn, .card-checkbox, .row-checkbox, [data-filter-folder]")) {
-        e.preventDefault();
-        return;
-      }
-      const bid = el.dataset.bid;
-      if (selectedIds.has(bid)) {
-        dragIds = new Set(selectedIds);
-        // FIX: also carry along any selected folders when dragging a selected bookmark
-        if (selectedFolderIds.size) dragFolderIds = new Set(selectedFolderIds);
-        else dragFolderIds = new Set();
+        const itemId = row.dataset.bid || row.dataset.fid;
+        const itemType = row.dataset.bid ? "bookmark" : "folder";
+
+        reorderDrag.active = true;
+        reorderDrag.itemId = itemId;
+        reorderDrag.itemType = itemType;
+        reorderDrag.sourceEl = row;
+        reorderDrag.overItemId = null;
+        reorderDrag.overItemType = null;
+        reorderDrag.overPosition = null;
+
+        const blank = new Image();
+        blank.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+        e.dataTransfer.setDragImage(blank, 0, 0);
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", itemId);
+
+        requestAnimationFrame(() => row.classList.add("reorder-dragging"));
+
       } else {
-        dragIds = new Set([bid]);
-        dragFolderIds = new Set();
+        // ── FOLDER-MOVE drag (existing behaviour) ──
+        const bid = row.dataset.bid;
+        const fid = row.dataset.fid;
+
+        if (bid) {
+          if (selectedIds.has(bid)) {
+            dragIds = new Set(selectedIds);
+            dragFolderIds = selectedFolderIds.size ? new Set(selectedFolderIds) : new Set();
+          } else {
+            dragIds = new Set([bid]);
+            dragFolderIds = new Set();
+          }
+          createDragGhost(dragIds, dragFolderIds);
+        } else if (fid) {
+          if (selectedFolderIds.has(fid)) {
+            dragFolderIds = new Set(selectedFolderIds);
+            dragIds = selectedIds.size ? new Set(selectedIds) : new Set();
+          } else {
+            dragFolderIds = new Set([fid]);
+            dragIds = new Set();
+          }
+          createDragGhost(dragIds, dragFolderIds);
+        }
+
+        const blank = new Image();
+        blank.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+        e.dataTransfer.setDragImage(blank, 0, 0);
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", bid || fid || "");
+        requestAnimationFrame(() => row.classList.add("dragging"));
+      }
+    });
+
+    row.addEventListener("dragend", () => {
+      dragFromHandle = false;
+      row.classList.remove("reorder-dragging", "dragging");
+      hideIndicator();
+
+      if (reorderDrag.active) {
+        reorderDrag.active = false;
+        reorderDrag.itemId = null;
+        reorderDrag.itemType = null;
+        reorderDrag.sourceEl = null;
+        reorderDrag.overItemId = null;
+        reorderDrag.overItemType = null;
+        reorderDrag.overPosition = null;
+      } else {
+        dragIds.clear();
+        dragFolderIds.clear();
+        removeDragGhost();
+      }
+    });
+
+    row.addEventListener("dragover", (e) => {
+      if (!reorderDrag.active) {
+        if (dragIds.size || dragFolderIds.size) {
+  e.preventDefault();
+  if (row.dataset.fid) {
+    // Clear any other highlighted rows first
+    document.querySelectorAll("#orderedList .drag-over").forEach(el => el.classList.remove("drag-over"));
+    row.classList.add("drag-over");
+  }
+}
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "move";
+
+      const rect = row.getBoundingClientRect();
+      const position = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+      const overId = row.dataset.bid || row.dataset.fid;
+      const overType = row.dataset.bid ? "bookmark" : "folder";
+
+      if (overId === reorderDrag.itemId && overType === reorderDrag.itemType) {
+        hideIndicator();
+        return;
       }
 
-      createDragGhost(dragIds, dragFolderIds);
-      const blank = new Image();
-      blank.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
-      e.dataTransfer.setDragImage(blank, 0, 0);
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", [...dragIds].join(","));
-      requestAnimationFrame(() => el.classList.add("dragging"));
+      reorderDrag.overItemId = overId;
+      reorderDrag.overItemType = overType;
+      reorderDrag.overPosition = position;
+      showIndicator(row, position);
     });
+row.addEventListener("dragleave", (e) => {
+  if (!row.contains(e.relatedTarget)) row.classList.remove("drag-over");
+});
 
-    el.addEventListener("dragend", () => {
-      el.classList.remove("dragging");
-      dragIds.clear();
-      dragFolderIds.clear();
-      removeDragGhost();
+    row.addEventListener("drop", async (e) => {
+      // Handle reorder drop
+      if (reorderDrag.active) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const { itemId, itemType, overItemId, overItemType, overPosition } = reorderDrag;
+        hideIndicator();
+        reorderDrag.active = false;
+
+        if (!overItemId || (overItemId === itemId && overItemType === itemType)) return;
+        await commitReorder(resolvedItems, itemId, itemType, overItemId, overItemType, overPosition);
+        return;
+      }
+
+      // Handle folder-move drop onto a folder row
+      if ((dragIds.size || dragFolderIds.size) && row.dataset.fid) {
+  e.preventDefault();
+  e.stopPropagation();
+  const targetFid = row.dataset.fid;
+
+  const bmIds = [...dragIds];
+  const folIds = [...dragFolderIds].filter(id => id !== targetFid);
+  dragIds.clear();
+  dragFolderIds.clear();
+
+  document.querySelectorAll("#orderedList .drag-over").forEach(el => el.classList.remove("drag-over")); // ← ADD HERE
+  if (bmIds.length) await executeBulkMove(bmIds, targetFid);
+  if (folIds.length) await executeBulkMoveFolders(folIds, targetFid);
+  removeDragGhost();
+}
     });
   });
 
-  container.querySelectorAll("[data-action]").forEach(btn => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const bm = allBookmarks.find(b => b.id === btn.dataset.bid);
-      if (!bm) return;
-      if (btn.dataset.action === "open") window.open(bm.url, "_blank");
-      if (btn.dataset.action === "archive") openPreview(bm);
-      if (btn.dataset.action === "delete") confirmDelete(bm);
+  // Prevent the container from swallowing dragover during reorder
+  const list2 = document.getElementById("orderedList");
+  if (list2) {
+    list2.addEventListener("dragover", (e) => {
+      if (reorderDrag.active) e.preventDefault();
     });
-  });
+  }
+}
+
+// ── Commit reorder: compute new position and save to server ───────────────────
+async function commitReorder(currentItems, dragId, dragType, overId, overType, position) {
+  // Build current order array without the dragged item
+  const withoutDrag = currentItems.filter(
+    item => !(item.id === dragId && item.item_type === dragType)
+  );
+
+  // Find index of the target item
+  const overIdx = withoutDrag.findIndex(
+    item => item.id === overId && item.item_type === overType
+  );
+  if (overIdx === -1) return;
+
+  // Insert dragged item at new position
+  const insertIdx = position === "before" ? overIdx : overIdx + 1;
+  const draggedItem = currentItems.find(i => i.id === dragId && i.item_type === dragType);
+  if (!draggedItem) return;
+
+  const newOrder = [...withoutDrag];
+  newOrder.splice(insertIdx, 0, draggedItem);
+
+  // Compute new position using float midpoint
+  const prevPos = insertIdx > 0 ? (newOrder[insertIdx - 1].position ?? (insertIdx * 1000)) : 0;
+  const nextPos = insertIdx < newOrder.length - 1
+    ? (newOrder[insertIdx + 1].position ?? ((insertIdx + 2) * 1000))
+    : prevPos + 2000;
+
+  let newPos = (prevPos + nextPos) / 2;
+
+  // Update local cache optimistically
+  const folderId = currentFilter.type === "folder" ? currentFilter.value : null;
+  const cacheKey = folderId || "__root__";
+  const cachedItems = orderedItemsCache[cacheKey];
+  if (cachedItems) {
+    const targetInCache = cachedItems.find(
+      i => (i.id || i.item_id) === dragId && i.item_type === dragType
+    );
+    if (targetInCache) {
+      targetInCache.position = newPos;
+      // Re-sort the cache
+      orderedItemsCache[cacheKey] = cachedItems.sort((a, b) => a.position - b.position);
+    }
+  }
+
+  // Re-render immediately (optimistic)
+  render();
+
+  // Save to server: send full new order
+  const orderedPayload = newOrder.map(item => ({
+    item_id: item.id,
+    item_type: item.item_type,
+  }));
+
+  try {
+    const res = await fetch(`${API}/folder/order`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folder_id: folderId,
+        items: orderedPayload,
+      }),
+    });
+    if (!res.ok) throw new Error();
+
+    // Refresh cache from server to get clean positions
+    await fetchOrderedContents(folderId, vaults[0]?.name || "default");
+    render();
+  } catch {
+    toast("❌ Failed to save order");
+    // Revert: re-fetch from server
+    await fetchOrderedContents(folderId, vaults[0]?.name || "default");
+    render();
+  }
 }
 
 function updateMainHeader(count) {
@@ -946,17 +1297,30 @@ function folderBadgeHtml(folder_id) {
                title="Filter by this folder" style="cursor:pointer">📁 ${escHtml(name)}</span>`;
 }
 
-// ADD THIS NEW HELPER:
 function faviconHtml(bm) {
   if (bm.favicon_path) {
     return `<img src="${API}/static/favicons/${bm.id}.ico" style="width:14px;height:14px;vertical-align:text-bottom;margin-right:6px;border-radius:2px;" onerror="this.style.display='none'">`;
   } else if (bm.favicon_url) {
     return `<img src="${escAttr(bm.favicon_url)}" style="width:14px;height:14px;vertical-align:text-bottom;margin-right:6px;border-radius:2px;" onerror="this.style.display='none'">`;
   }
-  return `<span style="font-size:12px;margin-right:6px;opacity:0.7">🌐</span>`; 
+  return `<span style="font-size:12px;margin-right:6px;opacity:0.7">🌐</span>`;
 }
 
-// ── Card HTML ─────────────────────────────────────────────────────────────────
+// ── Grip handle HTML ──────────────────────────────────────────────────────────
+function gripHandle() {
+  return `<div class="reorder-handle" title="Drag to reorder">
+    <svg width="14" height="18" viewBox="0 0 10 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="3" cy="2.5" r="1.2" fill="currentColor"/>
+      <circle cx="7" cy="2.5" r="1.2" fill="currentColor"/>
+      <circle cx="3" cy="7" r="1.2" fill="currentColor"/>
+      <circle cx="7" cy="7" r="1.2" fill="currentColor"/>
+      <circle cx="3" cy="11.5" r="1.2" fill="currentColor"/>
+      <circle cx="7" cy="11.5" r="1.2" fill="currentColor"/>
+    </svg>
+  </div>`;
+}
+
+// ── Card HTML (grid view — unchanged) ────────────────────────────────────────
 function cardHtml(bm, idx) {
   const thumb = bm.screenshot ? thumbImg(bm.id) : placeholderDiv(true);
   const tags = (bm.tags || []).slice(0, 2).map(t =>
@@ -978,9 +1342,9 @@ function cardHtml(bm, idx) {
     <div class="card-body">
       <div class="card-title">${escHtml(bm.title || bm.url)}</div>
       <div class="card-url" style="display:flex;align-items:center;">
-  ${faviconHtml(bm)}
-  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(hostOf(bm.url))}</span>
-</div>
+        ${faviconHtml(bm)}
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(hostOf(bm.url))}</span>
+      </div>
       <div class="card-meta">
         <span class="badge badge-vault">${escHtml(bm.vault || "default")}</span>
         ${folderBadgeHtml(bm.folder_id)}
@@ -991,7 +1355,7 @@ function cardHtml(bm, idx) {
   </div>`;
 }
 
-// ── Row HTML ──────────────────────────────────────────────────────────────────
+// ── Row HTML (list view — bookmark) ──────────────────────────────────────────
 function rowHtml(bm, idx) {
   const thumb = bm.screenshot
     ? `<div class="row-thumb">${thumbImg(bm.id)}</div>`
@@ -1002,15 +1366,15 @@ function rowHtml(bm, idx) {
 
   return `
     <div class="bookmark-row${isSel ? " selected" : ""}"
-         data-bid="${escAttr(bm.id)}" data-idx="${idx}">
-      <div class="row-checkbox" title="Select"></div>
+         data-bid="${escAttr(bm.id)}" data-idx="${idx}" draggable="false">
+      ${gripHandle()}
       ${thumb}
       <div class="row-info">
         <div class="row-title">${escHtml(bm.title || bm.url)}</div>
-       <div class="row-url" style="display:flex;align-items:center;">
-  ${faviconHtml(bm)}
-  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(bm.url)}</span>
-</div>
+        <div class="row-url" style="display:flex;align-items:center;">
+          ${faviconHtml(bm)}
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(bm.url)}</span>
+        </div>
       </div>
       <div class="row-badges">
         <span class="badge badge-vault">${escHtml(bm.vault || "default")}</span>
@@ -1024,6 +1388,218 @@ function rowHtml(bm, idx) {
         <button class="action-btn danger" data-action="delete" data-bid="${escAttr(bm.id)}">🗑</button>
       </div>
     </div>`;
+}
+
+// ── Folder row HTML (list view — for ordered interleaved list) ────────────────
+function folderRowHtml(folder, idx) {
+  const isSel = selectedFolderIds.has(folder.id);
+  const count = (folder.subfolder_count || 0) + (folder.bookmark_count || 0);
+
+  return `
+    <div class="bookmark-row folder-row${isSel ? " selected" : ""}"
+         data-fid="${escAttr(folder.id)}" data-idx="${idx}" draggable="false">
+      ${gripHandle()}
+
+      <div class="row-thumb" style="display:flex;align-items:center;justify-content:center;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.15);">
+        <span style="font-size:20px">📁</span>
+      </div>
+      <div class="row-info">
+        <div class="row-title" style="color:var(--yellow)">${escHtml(folder.name)}</div>
+        <div class="row-url" style="font-family:'JetBrains Mono',monospace">
+          ${count} item${count !== 1 ? "s" : ""}
+        </div>
+      </div>
+      <div class="row-badges">
+        <span class="badge" style="background:rgba(245,158,11,0.12);color:var(--yellow)">📁 Folder</span>
+      </div>
+      <div class="row-actions">
+        <button class="action-btn" data-action="open-folder" data-fid="${escAttr(folder.id)}">↗ Open</button>
+        <button class="action-btn danger" data-action="delete-folder" data-fid="${escAttr(folder.id)}">🗑</button>
+      </div>
+    </div>`;
+}
+
+// ── Grid view: bind subfolder cards ──────────────────────────────────────────
+function bindSubfolderCards() {
+  const container = document.getElementById("bookmarksContainer");
+  container.querySelectorAll(".subfolder-card").forEach(card => {
+    const fid = card.dataset.fid;
+
+    card.addEventListener("click", (e) => {
+      const isCheckbox = e.target.closest(".subfolder-checkbox");
+      if (isCheckbox || e.shiftKey || e.metaKey || e.ctrlKey ||
+        selectedIds.size > 0 || selectedFolderIds.size > 0) {
+        e.preventDefault();
+        if (selectedFolderIds.has(fid)) selectedFolderIds.delete(fid);
+        else selectedFolderIds.add(fid);
+        updateBulkBar();
+        render();
+      }
+    });
+
+    card.addEventListener("dblclick", async (e) => {
+      if (e.target.closest(".subfolder-checkbox")) return;
+      document.querySelectorAll(".sidebar-item, .folder-tree-row").forEach(i =>
+        i.classList.toggle("active", i.dataset.filter === "folder" && i.dataset.value === fid));
+      currentFilter = { type: "folder", value: fid };
+      clearSelection();
+      if (currentView === "list") await ensureOrderedItems();
+      render();
+    });
+
+    card.addEventListener("dragover", (e) => {
+      if (!dragIds.size && !dragFolderIds.size) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      card.classList.add("drag-over");
+    });
+    card.addEventListener("dragleave", (e) => {
+      if (!card.contains(e.relatedTarget)) card.classList.remove("drag-over");
+    });
+    card.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      card.classList.remove("drag-over");
+
+      const droppingFolderIntoItself = dragFolderIds.has(fid);
+      const bmIds = [...dragIds];
+      const folIds = [...dragFolderIds].filter(id => id !== fid);
+      dragIds.clear();
+      dragFolderIds.clear();
+
+      if (bmIds.length) await executeBulkMove(bmIds, fid);
+      if (folIds.length) await executeBulkMoveFolders(folIds, fid);
+      if (droppingFolderIntoItself && folIds.length < dragFolderIds.size) {
+        toast("❌ Can't move a folder into itself");
+      }
+      removeDragGhost();
+    });
+
+    card.addEventListener("dragstart", (e) => {
+      if (selectedFolderIds.has(fid)) {
+        dragFolderIds = new Set(selectedFolderIds);
+        if (selectedIds.size) dragIds = new Set(selectedIds);
+      } else {
+        dragFolderIds = new Set([fid]);
+        dragIds = new Set();
+      }
+      createDragGhost(dragIds, dragFolderIds);
+      const blank = new Image();
+      blank.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+      e.dataTransfer.setDragImage(blank, 0, 0);
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", fid);
+      requestAnimationFrame(() => card.classList.add("dragging"));
+    });
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      dragFolderIds.clear();
+      dragIds.clear();
+      removeDragGhost();
+    });
+  });
+}
+
+// ── Grid view: bind bookmark cards ───────────────────────────────────────────
+function bindBookmarkCards() {
+  const container = document.getElementById("bookmarksContainer");
+  const items = getFiltered();
+
+  container.querySelectorAll("[data-bid]").forEach((el, idx) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest(".card-action-btn, .action-btn, [data-filter-folder]")) return;
+
+      const isCheckbox = e.target.closest(".card-checkbox, .row-checkbox");
+      if (isCheckbox || e.shiftKey || e.metaKey || e.ctrlKey ||
+        selectedIds.size > 0 || selectedFolderIds.size > 0) {
+        e.preventDefault();
+        handleSelectionClick(el.dataset.bid, idx, e.shiftKey, items);
+        return;
+      }
+      const bm = allBookmarks.find(b => b.id === el.dataset.bid);
+      if (bm) openDetail(bm);
+    });
+
+    el.setAttribute("draggable", "true");
+
+    el.addEventListener("dragstart", (e) => {
+      if (e.target.closest(".card-action-btn, .action-btn, .card-checkbox, .row-checkbox, [data-filter-folder]")) {
+        e.preventDefault();
+        return;
+      }
+      const bid = el.dataset.bid;
+      if (selectedIds.has(bid)) {
+        dragIds = new Set(selectedIds);
+        if (selectedFolderIds.size) dragFolderIds = new Set(selectedFolderIds);
+        else dragFolderIds = new Set();
+      } else {
+        dragIds = new Set([bid]);
+        dragFolderIds = new Set();
+      }
+      createDragGhost(dragIds, dragFolderIds);
+      const blank = new Image();
+      blank.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+      e.dataTransfer.setDragImage(blank, 0, 0);
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", [...dragIds].join(","));
+      requestAnimationFrame(() => el.classList.add("dragging"));
+    });
+
+    el.addEventListener("dragend", () => {
+      el.classList.remove("dragging");
+      dragIds.clear();
+      dragFolderIds.clear();
+      removeDragGhost();
+    });
+  });
+}
+
+// ── Bind action buttons in list view rows ─────────────────────────────────────
+function bindBookmarkRowActions() {
+  const container = document.getElementById("bookmarksContainer");
+
+  container.querySelectorAll("[data-action]").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+
+      // Folder row actions
+      if (btn.dataset.action === "open-folder") {
+        const fid = btn.dataset.fid;
+        currentFilter = { type: "folder", value: fid };
+        clearSelection();
+        if (currentView === "list") await ensureOrderedItems();
+        render();
+        return;
+      }
+      if (btn.dataset.action === "delete-folder") {
+        const fid = btn.dataset.fid;
+        const folder = folderMap[fid];
+        if (!confirm(`Delete folder "${folder?.name || fid}"? Bookmarks inside will be moved to root.`)) return;
+        try {
+          const res = await fetch(`${API}/folders/${fid}`, { method: "DELETE" });
+          if (!res.ok) throw new Error();
+          delete folderMap[fid];
+          const cacheKey = currentFilter.type === "folder" ? currentFilter.value || "__root__" : "__root__";
+          if (orderedItemsCache[cacheKey]) {
+            orderedItemsCache[cacheKey] = orderedItemsCache[cacheKey].filter(
+              i => !((i.id || i.item_id) === fid && i.item_type === "folder")
+            );
+          }
+          await renderSidebar();
+          render();
+          toast("🗑 Folder deleted");
+        } catch { toast("❌ Delete failed"); }
+        return;
+      }
+
+      // Bookmark row actions
+      const bm = allBookmarks.find(b => b.id === btn.dataset.bid);
+      if (!bm) return;
+      if (btn.dataset.action === "open") window.open(bm.url, "_blank");
+      if (btn.dataset.action === "archive") openPreview(bm);
+      if (btn.dataset.action === "delete") confirmDelete(bm);
+    });
+  });
 }
 
 // ── Selection ─────────────────────────────────────────────────────────────────
@@ -1070,7 +1646,6 @@ function updateBulkBar() {
   document.getElementById("bulkTag").style.opacity = bmCount ? "1" : "0.4";
   document.getElementById("bulkTag").style.pointerEvents = bmCount ? "auto" : "none";
 
-  // ADDED THIS: Fetch button logic (only active if bookmarks are selected AND NO folders are selected)
   const canFetch = (bmCount > 0 && folCount === 0);
   document.getElementById("bulkFetch").style.opacity = canFetch ? "1" : "0.4";
   document.getElementById("bulkFetch").style.pointerEvents = canFetch ? "auto" : "none";
@@ -1111,21 +1686,33 @@ async function bulkDeleteSelected() {
 
   allBookmarks = allBookmarks.filter(b => !bmIds.includes(b.id));
   folIds.forEach(id => delete folderMap[id]);
+
+  // Clear affected caches
+  const folderId = currentFilter.type === "folder" ? currentFilter.value : null;
+  const cacheKey = folderId || "__root__";
+  if (orderedItemsCache[cacheKey]) {
+    orderedItemsCache[cacheKey] = orderedItemsCache[cacheKey].filter(item => {
+      const id = item.id || item.item_id;
+      if (item.item_type === "bookmark") return !bmIds.includes(id);
+      if (item.item_type === "folder") return !folIds.includes(id);
+      return true;
+    });
+  }
+
   clearSelection();
   updateStats();
   renderSidebar();
   render();
   toast(`🗑 Deleted ${deleted} item${deleted !== 1 ? "s" : ""}`);
 }
-// ── Bulk & Single Fetch Archiving ──────────────────────────────────────────────
+
+// ── Bulk Fetch ────────────────────────────────────────────────────────────────
 async function executeBulkFetch() {
-  const bmIds = targetFetchIds; // READ FROM OUR NEW VARIABLE
+  const bmIds = targetFetchIds;
   if (!bmIds.length) return;
 
-  // Read our new checkbox state
   const doArchive = document.getElementById("bulkFetchArchiveCheck").checked;
 
-  // Close the modal and show loading toast
   document.getElementById("bulkFetchOverlay").classList.remove("open");
   toast(`⏳ Fetching ${bmIds.length} item${bmIds.length > 1 ? "s" : ""}... Please wait.`, 60000);
 
@@ -1135,45 +1722,43 @@ async function executeBulkFetch() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: bmIds, archive: doArchive }),
     });
-    
+
     if (!res.ok) throw new Error();
     const data = await res.json();
 
-    // Update local state for successfully fetched items
     data.successful_ids.forEach(id => {
       const bm = allBookmarks.find(b => b.id === id);
       if (bm) {
         bm.screenshot = true;
-        bm.favicon_path = "ready"; // <--- ADD THIS LINE
+        bm.favicon_path = "ready";
         if (doArchive) {
-           bm.archived = true; 
-           bm.html_path = "ready";
+          bm.archived = true;
+          bm.html_path = "ready";
         }
       }
     });
 
     clearSelection();
     updateStats();
-    
-    // If the detail panel is open and we just updated that specific bookmark, refresh it
+
     if (document.getElementById("detailOverlay").classList.contains("open") && bmIds.length === 1) {
       const updatedBm = allBookmarks.find(b => b.id === bmIds[0]);
-      if (updatedBm) openDetail(updatedBm); 
+      if (updatedBm) openDetail(updatedBm);
     }
-    
+
     render();
-    
-    // Notify user of results
+
     if (data.successful_count === data.total_requested) {
       toast(`✅ Successfully fetched ${data.successful_count} bookmark${data.successful_count > 1 ? "s" : ""}!`, 4000);
     } else {
       toast(`⚠ Fetched ${data.successful_count} out of ${data.total_requested}.`, 5000);
     }
-    
-  } catch { 
-    toast("❌ Fetch failed due to a network error."); 
+
+  } catch {
+    toast("❌ Fetch failed due to a network error.");
   }
 }
+
 // ── Folder picker ─────────────────────────────────────────────────────────────
 function openFolderPicker(mode) {
   folderPickerMode = mode;
@@ -1227,15 +1812,11 @@ function closeFolderPicker() {
   folderPickerSelId = null;
 }
 
-// FIX: Capture selection IDs before any async render/renderSidebar call clears
-// or re-renders state. Old code read selectedIds/selectedFolderIds lazily after
-// each await, but executeBulkMove calls render() which could cause selection
-// state to be read after visual update. Now we snapshot them upfront.
 async function confirmFolderPick() {
   if (folderPickerMode === "move") {
     const bmIds = [...selectedIds];
     const folIds = [...selectedFolderIds];
-    const target = folderPickerSelId;   // snapshot before anything async touches state
+    const target = folderPickerSelId;
 
     closeFolderPicker();
     clearSelection();
@@ -1251,7 +1832,6 @@ async function confirmFolderPick() {
     clearSelection();
 
     if (bmIds.length) await executeBulkCopy(bmIds, target);
-    // folder copy not supported; silently skip
   }
 }
 
@@ -1269,14 +1849,22 @@ async function executeBulkMove(ids, folderId) {
       const bm = allBookmarks.find(b => b.id === id);
       if (bm) bm.folder_id = folderId;
     });
+
+    // Invalidate both source and target caches
+    const srcKey = currentFilter.type === "folder" ? currentFilter.value || "__root__" : "__root__";
+if (orderedItemsCache[srcKey]) {
+  orderedItemsCache[srcKey] = orderedItemsCache[srcKey].filter(
+    i => !ids.includes(i.id || i.item_id)
+  );
+}
+    if (folderId) delete orderedItemsCache[folderId];
+    console.log(currentFilter) 
     render();
     renderSidebar();
     toast(`✦ Moved ${data.count} bookmark${data.count !== 1 ? "s" : ""}`);
   } catch { toast("❌ Move failed"); }
 }
 
-// FIX: executeBulkMoveFolders now surfaces per-folder errors more clearly
-// and correctly serializes null as parent_id (root) vs a real ID.
 async function executeBulkMoveFolders(folderIds, newParentId) {
   if (!folderIds.length) return;
   let moved = 0;
@@ -1307,6 +1895,14 @@ async function executeBulkMoveFolders(folderIds, newParentId) {
   }
 
   if (moved) {
+    // Invalidate caches
+    const srcKey = currentFilter.type === "folder" ? currentFilter.value || "__root__" : "__root__";
+if (orderedItemsCache[srcKey]) {
+  orderedItemsCache[srcKey] = orderedItemsCache[srcKey].filter(
+    i => !folderIds.includes(i.id || i.item_id)
+  );
+}
+    if (newParentId) delete orderedItemsCache[newParentId];
     await renderSidebar();
     render();
     toast(`✦ Moved ${moved} folder${moved !== 1 ? "s" : ""}`);
@@ -1327,6 +1923,11 @@ async function executeBulkCopy(ids, folderId) {
     if (!res.ok) throw new Error();
     const data = await res.json();
     allBookmarks.push(...(data.bookmarks || []));
+
+    // Invalidate target cache
+    if (folderId) delete orderedItemsCache[folderId];
+    else delete orderedItemsCache["__root__"];
+
     updateStats();
     render();
     renderSidebar();
@@ -1385,6 +1986,15 @@ async function confirmDelete(bm) {
     if (!res.ok) throw new Error();
     allBookmarks = allBookmarks.filter(b => b.id !== bm.id);
     selectedIds.delete(bm.id);
+
+    // Remove from ordered cache
+    const cacheKey = bm.folder_id || "__root__";
+    if (orderedItemsCache[cacheKey]) {
+      orderedItemsCache[cacheKey] = orderedItemsCache[cacheKey].filter(
+        i => !((i.id || i.item_id) === bm.id && i.item_type === "bookmark")
+      );
+    }
+
     updateStats();
     renderSidebar();
     updateBulkBar();
@@ -1407,10 +2017,11 @@ function openDetail(bm) {
   document.getElementById("detailBody").innerHTML = `
     <div class="detail-thumb">${thumb}</div>
     <div class="detail-title">${escHtml(bm.title || "Untitled")}</div>
-<div class="detail-url" data-url="${escAttr(bm.url)}" style="display:flex;align-items:center;">
-  ${faviconHtml(bm)} 
-  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(bm.url)}</span>
-</div>    <div class="detail-field">
+    <div class="detail-url" data-url="${escAttr(bm.url)}" style="display:flex;align-items:center;">
+      ${faviconHtml(bm)}
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(bm.url)}</span>
+    </div>
+    <div class="detail-field">
       <div class="detail-field-label">Vault</div>
       <div class="detail-field-value">📁 ${escHtml(bm.vault || "default")}</div>
     </div>
@@ -1538,18 +2149,15 @@ function openDetail(bm) {
   `;
   footer.querySelectorAll("[data-action]").forEach(btn => {
     btn.addEventListener("click", () => {
-      if (btn.dataset.action === "open-url")     window.open(btn.dataset.url, "_blank");
+      if (btn.dataset.action === "open-url") window.open(btn.dataset.url, "_blank");
       if (btn.dataset.action === "view-archive") openPreview(allBookmarks.find(b => b.id === btn.dataset.bid));
-      
-      // UPDATE THIS LINE:
       if (btn.dataset.action === "refetch") {
-        targetFetchIds = [btn.dataset.bid]; // Grab just this single ID
+        targetFetchIds = [btn.dataset.bid];
         document.getElementById("bulkFetchArchiveCheck").checked = false;
-        document.getElementById("bulkFetchTitle").textContent = `Fetch Bookmark`; // Clean title for single fetch
+        document.getElementById("bulkFetchTitle").textContent = `Fetch Bookmark`;
         document.getElementById("bulkFetchOverlay").classList.add("open");
       }
-      
-      if (btn.dataset.action === "delete")       confirmDelete(allBookmarks.find(b => b.id === btn.dataset.bid));
+      if (btn.dataset.action === "delete") confirmDelete(allBookmarks.find(b => b.id === btn.dataset.bid));
     });
   });
 
@@ -1615,13 +2223,14 @@ function showError() {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function setFolderFilter(fid) {
+async function setFolderFilter(fid) {
   currentFilter = { type: "folder", value: fid };
   searchQuery = "";
   document.getElementById("searchInput").value = "";
   document.querySelectorAll(".sidebar-item, .folder-tree-row").forEach(i => {
     i.classList.toggle("active", i.dataset.filter === "folder" && i.dataset.value === fid);
   });
+  if (currentView === "list") await ensureOrderedItems();
   render();
 }
 
@@ -1645,18 +2254,13 @@ function escAttr(str = "") { return escHtml(str); }
 
 // ── New Folder Modal ──────────────────────────────────────────────────────────
 function openNewFolderModal() {
-  // Pre-fill parent context
   const inFolder = currentFilter.type === "folder" && currentFilter.value;
   const parentName = inFolder ? (folderMap[currentFilter.value]?.name || "") : "";
-  const contextLabel = inFolder
-    ? `Inside: 📁 ${escHtml(parentName)}`
-    : "Inside: 🗂 Root";
 
   document.getElementById("newFolderContext").textContent =
     inFolder ? `Inside: 📁 ${parentName}` : "Inside: 🗂 Root";
   document.getElementById("newFolderName").value = "";
 
-  // Vault selector: populate with known vaults
   const vaultSel = document.getElementById("newFolderVault");
   const currentVault = currentFilter.type === "vault"
     ? currentFilter.value
@@ -1690,22 +2294,26 @@ async function confirmNewFolder() {
     });
     if (!res.ok) throw new Error();
     const folder = await res.json();
-    // Add to local folderMap immediately
     folderMap[folder.id] = { ...folder };
+
+    // Invalidate ordered cache for the parent folder
+    const cacheKey = parent_id || "__root__";
+    delete orderedItemsCache[cacheKey];
+
     closeNewFolderModal();
     await renderSidebar();
+    if (currentView === "list") await ensureOrderedItems();
     render();
     toast(`📁 Folder "${name}" created`);
   } catch { toast("❌ Failed to create folder"); }
 }
 
 // ── New Bookmark Modal ────────────────────────────────────────────────────────
-let fetchedOgImage = null;  // base64 or null
+let fetchedOgImage = null;
 
 function openNewBookmarkModal() {
   fetchedOgImage = null;
 
-  // Reset form
   document.getElementById("newBookmarkUrl").value = "";
   document.getElementById("newBookmarkTitle").value = "";
   document.getElementById("newBookmarkTags").value = "";
@@ -1715,7 +2323,6 @@ function openNewBookmarkModal() {
     `<span style="font-size:28px">🔖</span>`;
   document.getElementById("newBookmarkMetaStatus").textContent = "";
 
-  // Pre-fill vault
   const currentVault = currentFilter.type === "vault"
     ? currentFilter.value
     : (vaults[0]?.name || "default");
@@ -1724,7 +2331,6 @@ function openNewBookmarkModal() {
     `<option value="${escAttr(v.name)}"${v.name === currentVault ? " selected" : ""}>${escHtml(v.name)}</option>`
   ).join("") || `<option value="default">default</option>`;
 
-  // Pre-fill folder
   const folderSel = document.getElementById("newBookmarkFolder");
   const folders = flatFolderList();
   const currentFid = currentFilter.type === "folder" ? currentFilter.value : null;
@@ -1752,10 +2358,9 @@ async function fetchBookmarkMeta() {
 
   const doArchive = document.getElementById("newBookmarkArchiveCheck").checked;
   const status = document.getElementById("newBookmarkMetaStatus");
-  const thumb  = document.getElementById("newBookmarkThumbPreview");
-  const btn    = document.getElementById("newBookmarkFetchBtn");
+  const thumb = document.getElementById("newBookmarkThumbPreview");
+  const btn = document.getElementById("newBookmarkFetchBtn");
 
-  // Show user that archiving takes longer
   status.textContent = doArchive ? "Fetching metadata & archiving HTML (~15s)..." : "Spinning up browser...";
   btn.disabled = true;
   btn.textContent = "⏳...";
@@ -1764,9 +2369,9 @@ async function fetchBookmarkMeta() {
     const res = await fetch(`${API}/fetch-meta`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, archive: doArchive }) // Pass the checkbox status
+      body: JSON.stringify({ url, archive: doArchive })
     });
-    
+
     if (!res.ok) throw new Error("Fetch failed");
     const data = await res.json();
 
@@ -1794,29 +2399,21 @@ async function confirmNewBookmark() {
   if (!url) { document.getElementById("newBookmarkUrl").focus(); return; }
 
   const titleInput = document.getElementById("newBookmarkTitle").value.trim();
-  const vault      = document.getElementById("newBookmarkVault").value;
-  const folder_id  = document.getElementById("newBookmarkFolder").value || null;
-  const notes      = document.getElementById("newBookmarkNotes").value.trim();
-  const tagsRaw    = document.getElementById("newBookmarkTags").value;
-  const tags       = tagsRaw.split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
+  const vault = document.getElementById("newBookmarkVault").value;
+  const folder_id = document.getElementById("newBookmarkFolder").value || null;
+  const notes = document.getElementById("newBookmarkNotes").value.trim();
+  const tagsRaw = document.getElementById("newBookmarkTags").value;
+  const tags = tagsRaw.split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
 
   let title = titleInput;
   if (!title) title = url;
 
-  // Read the archive checkbox state
   const doArchive = document.getElementById("newBookmarkArchiveCheck").checked;
-  
-  // NOTE: We don't send screenshot_data or html_data! 
-  // The backend already saved them to disk during the Fetch step.
-  const body = { 
-    url, 
-    title, 
-    vault, 
-    tags, 
-    notes, 
-    folder_id, 
-    screenshot: !!fetchedOgImage, 
-    archive: doArchive 
+
+  const body = {
+    url, title, vault, tags, notes, folder_id,
+    screenshot: !!fetchedOgImage,
+    archive: doArchive
   };
 
   try {
@@ -1828,41 +2425,40 @@ async function confirmNewBookmark() {
     if (!res.ok) throw new Error();
     const saved = await res.json();
 
-    // Create local object so UI updates instantly
     const newBm = {
       id: saved.id,
-      url,
-      title,
-      vault,
-      folder_id,
-      notes,
-      tags,
+      url, title, vault, folder_id, notes, tags,
       created_at: new Date().toISOString(),
       archived: doArchive,
       html_path: doArchive ? "ready" : null,
       screenshot: !!fetchedOgImage,
-      favicon_path: "ready", // <--- ADD THIS LINE
+      favicon_path: "ready",
     };
-    
+
     allBookmarks.unshift(newBm);
+
+    // Invalidate ordered cache for the folder it was saved to
+    const cacheKey = folder_id || "__root__";
+    delete orderedItemsCache[cacheKey];
+
     updateStats();
     closeNewBookmarkModal();
+    if (currentView === "list") await ensureOrderedItems();
     render();
     renderSidebar();
     toast(`🔖 Bookmark saved successfully`);
   } catch { toast("❌ Failed to save bookmark"); }
 }
-// ── Background Syncing (Window Focus Trick) ───────────────────────────────────
+
+// ── Background Syncing ────────────────────────────────────────────────────────
 async function silentRefresh() {
-  // Don't interrupt the user if they are dragging or typing in a modal
-  if (dragIds.size > 0 || dragFolderIds.size > 0) return;
+  if (dragIds.size > 0 || dragFolderIds.size > 0 || reorderDrag.active) return;
   if (document.getElementById("newBookmarkOverlay").classList.contains("open")) return;
   if (document.getElementById("newFolderOverlay").classList.contains("open")) return;
   if (document.getElementById("folderPickerOverlay").classList.contains("open")) return;
   if (document.getElementById("bulkFetchOverlay").classList.contains("open")) return;
 
   try {
-    // 1. Fetch latest bookmarks and vaults simultaneously
     const [bmRes, vaultRes] = await Promise.all([
       fetch(`${API}/recent?limit=500`),
       fetch(`${API}/vaults`)
@@ -1873,35 +2469,35 @@ async function silentRefresh() {
     const bmData = await bmRes.json();
     const vaultData = await vaultRes.json();
 
-    // 2. Update local state
     allBookmarks = bmData.bookmarks || [];
     vaults = vaultData.vaults || [];
 
-    // 3. Update UI seamlessly (retains your current filter and sort!)
-    updateStats();
-    render(); 
-    await renderSidebar(); // Automatically remembers which folders you had collapsed
-    updateBulkBar(); 
+    // Refresh ordered cache for current view
+    if (currentView === "list") await ensureOrderedItems();
 
-    // 4. If the Detail Panel is currently open, refresh it so new badges appear
+    updateStats();
+    render();
+    await renderSidebar();
+    updateBulkBar();
+
     const detailOverlay = document.getElementById("detailOverlay");
     if (detailOverlay.classList.contains("open")) {
       const deleteBtn = document.querySelector('#detailFooter [data-action="delete"]');
       if (deleteBtn && deleteBtn.dataset.bid) {
         const updatedBm = allBookmarks.find(b => b.id === deleteBtn.dataset.bid);
         if (updatedBm) {
-          openDetail(updatedBm); // Redraws it in place
+          openDetail(updatedBm);
         } else {
-          closeDetail(); // Closes it if you deleted it from the popup
+          closeDetail();
         }
       }
     }
   } catch (e) {
-    // Silently ignore network errors if backend is temporarily unreachable
+    // Silently ignore
   }
 }
 
-// Trigger silent refresh every time the dashboard tab regains focus
 window.addEventListener("focus", silentRefresh);
+
 // ── Go ────────────────────────────────────────────────────────────────────────
 boot();

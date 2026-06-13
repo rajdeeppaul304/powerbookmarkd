@@ -1204,6 +1204,57 @@
       .sidebar { display: none; }
       .bookmarks-grid, .loading-grid { grid-template-columns: 1fr; }
     }
+    .reorder-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 28px;
+  flex-shrink: 0;
+  color: var(--text3);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  border-radius: 4px;
+  padding: 2px;
+}
+.reorder-handle:active {
+  cursor: grabbing;
+}
+.bookmark-row:hover .reorder-handle,
+.folder-row:hover .reorder-handle {
+  opacity: 1;
+}
+.reorder-handle:hover {
+  color: var(--text2);
+  background: var(--bg3);
+}
+
+/* ── Row being reorder-dragged ── */
+.bookmark-row.reorder-dragging {
+  opacity: 0.35;
+  border-color: var(--blue);
+  background: rgba(59,130,246,0.05);
+}
+
+/* ── Folder row variant (list view interleaved) ── */
+.folder-row {
+  cursor: default;
+}
+.folder-row:hover {
+  border-color: rgba(245,158,11,0.4);
+}
+
+.bookmark-row.drag-over {
+  border-color: var(--blue) !important;
+  background: rgba(59,130,246,0.08) !important;
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.2) !important;
+}
+
+#orderedList .row-checkbox,
+#orderedList .subfolder-checkbox {
+  display: none !important;
+}
   </style>
 </head>
 <body>

@@ -25,15 +25,15 @@ from playwright.async_api import async_playwright
 BASE_DIR    = Path(__file__).parent.parent / "data"
 DB_PATH     = BASE_DIR / "bookmarks.db"
 ARCHIVE_DIR = BASE_DIR / "archive"
-FAVICON_DIR = BASE_DIR / "favicons" # Added this
+FAVICON_DIR = BASE_DIR / "favicons"
 
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-FAVICON_DIR.mkdir(parents=True, exist_ok=True) # Added this
+FAVICON_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="powerbookmarkd", version="1.2.3")
+app = FastAPI(title="powerbookmarkd", version="1.3.0")
 app.mount("/static/archive", StaticFiles(directory=str(ARCHIVE_DIR)), name="archive")
-app.mount("/static/favicons", StaticFiles(directory=str(FAVICON_DIR)), name="favicons") # Added this
+app.mount("/static/favicons", StaticFiles(directory=str(FAVICON_DIR)), name="favicons")
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,7 +65,7 @@ def init_db():
             screenshot       INTEGER DEFAULT 0,
             html_path        TEXT,
             screenshot_path  TEXT,
-            favicon_path     TEXT, -- Added this
+            favicon_path     TEXT,
             favicon_url      TEXT DEFAULT '',
             notes            TEXT DEFAULT ''
         );
@@ -108,6 +108,16 @@ def init_db():
             vault     TEXT DEFAULT 'default',
             FOREIGN KEY(parent_id) REFERENCES folders(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS item_order (
+            folder_id  TEXT,
+            item_id    TEXT NOT NULL,
+            item_type  TEXT NOT NULL CHECK(item_type IN ('bookmark', 'folder')),
+            position   REAL NOT NULL,
+            PRIMARY KEY (item_id, item_type)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_item_order_folder ON item_order(folder_id, position);
     """)
 
     # Live migrations: add columns if absent
@@ -120,7 +130,7 @@ def init_db():
     if "favicon_url" not in existing_cols:
         c.execute("ALTER TABLE bookmarks ADD COLUMN favicon_url TEXT DEFAULT ''")
     if "favicon_path" not in existing_cols:
-        c.execute("ALTER TABLE bookmarks ADD COLUMN favicon_path TEXT") # Live migration
+        c.execute("ALTER TABLE bookmarks ADD COLUMN favicon_path TEXT")
 
     conn.commit()
     conn.close()
@@ -162,6 +172,78 @@ JS_GET_FAVICON = """() => {
     if (!el) el = document.querySelector('link[rel="shortcut icon"]');
     return el ? el.href : new URL('/favicon.ico', document.baseURI).href;
 }"""
+
+# ── Ordering helpers ──────────────────────────────────────────────────────────
+REBALANCE_THRESHOLD = 0.0001
+REBALANCE_GAP = 1000.0
+
+def get_next_position(conn, folder_id: Optional[str], item_type: str = None) -> float:
+    """Return position value that places a new item at the bottom of a folder."""
+    if folder_id is None:
+        row = conn.execute(
+            "SELECT MAX(position) FROM item_order WHERE folder_id IS NULL"
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT MAX(position) FROM item_order WHERE folder_id=?", (folder_id,)
+        ).fetchone()
+    max_pos = row[0] if row and row[0] is not None else 0.0
+    return max_pos + REBALANCE_GAP
+
+def ensure_order_row(conn, folder_id: Optional[str], item_id: str, item_type: str):
+    """Insert an item_order row if it doesn't already exist (new item goes to bottom)."""
+    existing = conn.execute(
+        "SELECT position FROM item_order WHERE item_id=? AND item_type=?",
+        (item_id, item_type)
+    ).fetchone()
+    if existing:
+        return
+    pos = get_next_position(conn, folder_id, item_type)
+    conn.execute(
+        "INSERT INTO item_order (folder_id, item_id, item_type, position) VALUES (?,?,?,?)",
+        (folder_id, item_id, item_type, pos)
+    )
+
+def move_order_row(conn, folder_id: Optional[str], item_id: str, item_type: str):
+    """Update folder_id for an existing order row (item moved to different folder)."""
+    conn.execute(
+        "DELETE FROM item_order WHERE item_id=? AND item_type=?",
+        (item_id, item_type)
+    )
+    pos = get_next_position(conn, folder_id, item_type)
+    conn.execute(
+        "INSERT INTO item_order (folder_id, item_id, item_type, position) VALUES (?,?,?,?)",
+        (folder_id, item_id, item_type, pos)
+    )
+
+def rebalance_if_needed(conn, folder_id: Optional[str]):
+    """
+    Check if any adjacent positions are too close. If so, reassign clean
+    integer-spaced positions to all items in this folder.
+    Only touches item_order, never the bookmarks/folders tables.
+    """
+    if folder_id is None:
+        rows = conn.execute(
+            "SELECT item_id, item_type, position FROM item_order WHERE folder_id IS NULL ORDER BY position"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT item_id, item_type, position FROM item_order WHERE folder_id=? ORDER BY position",
+            (folder_id,)
+        ).fetchall()
+
+    needs_rebalance = False
+    for i in range(len(rows) - 1):
+        if abs(rows[i+1]["position"] - rows[i]["position"]) < REBALANCE_THRESHOLD:
+            needs_rebalance = True
+            break
+
+    if needs_rebalance:
+        for i, row in enumerate(rows):
+            conn.execute(
+                "UPDATE item_order SET position=? WHERE item_id=? AND item_type=?",
+                (float((i + 1) * REBALANCE_GAP), row["item_id"], row["item_type"])
+            )
 
 # ── Models ────────────────────────────────────────────────────────────────────
 class SaveRequest(BaseModel):
@@ -222,6 +304,19 @@ class BulkFetchRequest(BaseModel):
     ids: List[str]
     archive: bool = False
 
+class OrderItem(BaseModel):
+    item_id: str
+    item_type: str  # 'bookmark' | 'folder'
+
+class SetFolderOrderRequest(BaseModel):
+    """
+    Full ordered list of items for a folder.
+    Positions are assigned using floating-point gaps.
+    folder_id=None means root level.
+    """
+    folder_id: Optional[str] = None
+    items: List[OrderItem]
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def row_to_dict(row) -> dict:
     return dict(row)
@@ -266,10 +361,148 @@ def descendant_folder_ids(conn, folder_id: str) -> set:
                 queue.append(cid)
     return result
 
+def get_ordered_contents(conn, folder_id: Optional[str], vault: str, archived: Optional[bool] = None) -> dict:
+    """
+    Returns subfolders and bookmarks for a folder, sorted by item_order position.
+    Items without an order row get position=infinity (appear at the end).
+    Returns combined list with item_type attached, plus separate lists for compatibility.
+    """
+    # Fetch subfolders
+    if folder_id:
+        subfolder_rows = conn.execute(
+            "SELECT * FROM folders WHERE parent_id=? AND vault=? ORDER BY name",
+            (folder_id, vault)
+        ).fetchall()
+    else:
+        subfolder_rows = conn.execute(
+            "SELECT * FROM folders WHERE parent_id IS NULL AND vault=? ORDER BY name",
+            (vault,)
+        ).fetchall()
+
+    subfolders = []
+    for r in subfolder_rows:
+        d = row_to_dict(r)
+        counts = _folder_counts(conn, d["id"], vault)
+        d.update(counts)
+        subfolders.append(d)
+
+    # Fetch bookmarks
+    base_query = "SELECT * FROM bookmarks WHERE vault=? AND "
+    if folder_id:
+        base_query += "folder_id=?"
+        params: tuple = (vault, folder_id)
+    else:
+        base_query += "folder_id IS NULL"
+        params = (vault,)
+
+    if archived is not None:
+        base_query += " AND archived=?"
+        params += (1 if archived else 0,)
+
+    base_query += " ORDER BY created_at DESC"
+    bookmark_rows = conn.execute(base_query, params).fetchall()
+    bookmarks = [enrich_bookmark(conn, r) for r in bookmark_rows]
+
+    # Fetch order map for this folder
+    if folder_id is None:
+        order_rows = conn.execute(
+            "SELECT item_id, item_type, position FROM item_order WHERE folder_id IS NULL"
+        ).fetchall()
+    else:
+        order_rows = conn.execute(
+            "SELECT item_id, item_type, position FROM item_order WHERE folder_id=?",
+            (folder_id,)
+        ).fetchall()
+
+    order_map = {(r["item_id"], r["item_type"]): r["position"] for r in order_rows}
+
+    UNORDERED_POS = 1e9  # float("inf") is not JSON-serializable
+
+    for f in subfolders:
+        f["position"] = order_map.get((f["id"], "folder"), UNORDERED_POS)
+        f["item_type"] = "folder"
+
+    for b in bookmarks:
+        b["position"] = order_map.get((b["id"], "bookmark"), UNORDERED_POS)
+        b["item_type"] = "bookmark"
+
+
+    # Build interleaved sorted list (for list view)
+    all_items = sorted(subfolders + bookmarks, key=lambda x: x["position"])
+
+    return {
+        "current_folder_id": folder_id,
+        "subfolders": subfolders,   # kept for grid view / sidebar compat
+        "bookmarks": bookmarks,     # kept for compat
+        "ordered_items": all_items, # new: interleaved sorted list for list view
+    }
+
 # ── Health ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "powerbookmarkd", "version": "1.2.3"}
+    return {"status": "ok", "service": "powerbookmarkd", "version": "1.3.0"}
+
+# ── Order endpoint ────────────────────────────────────────────────────────────
+@app.post("/folder/order")
+def set_folder_order(req: SetFolderOrderRequest):
+    """
+    Accepts the full ordered list of items for a folder and assigns
+    floating-point positions with REBALANCE_GAP spacing.
+    Rebalances if any gap drops below REBALANCE_THRESHOLD.
+    """
+    conn = get_db()
+
+    if req.folder_id is not None:
+        _validate_folder(conn, req.folder_id)
+
+    # Validate item_types
+    for item in req.items:
+        if item.item_type not in ("bookmark", "folder"):
+            conn.close()
+            raise HTTPException(400, f"Invalid item_type '{item.item_type}'")
+
+    # Assign positions with clean gaps
+    for i, item in enumerate(req.items):
+        pos = float((i + 1) * REBALANCE_GAP)
+        existing = conn.execute(
+            "SELECT position FROM item_order WHERE item_id=? AND item_type=?",
+            (item.item_id, item.item_type)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE item_order SET folder_id=?, position=? WHERE item_id=? AND item_type=?",
+                (req.folder_id, pos, item.item_id, item.item_type)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO item_order (folder_id, item_id, item_type, position) VALUES (?,?,?,?)",
+                (req.folder_id, item.item_id, item.item_type, pos)
+            )
+
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "folder_id": req.folder_id, "count": len(req.items)}
+
+@app.get("/folder/{folder_id}/order")
+def get_folder_order(folder_id: str):
+    """Get the ordered item list for a specific folder."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT item_id, item_type, position FROM item_order WHERE folder_id=? ORDER BY position",
+        (folder_id,)
+    ).fetchall()
+    conn.close()
+    return {"folder_id": folder_id, "items": [dict(r) for r in rows]}
+
+@app.get("/root/order")
+def get_root_order():
+    """Get the ordered item list for root level (folder_id IS NULL)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT item_id, item_type, position FROM item_order WHERE folder_id IS NULL ORDER BY position"
+    ).fetchall()
+    conn.close()
+    return {"folder_id": None, "items": [dict(r) for r in rows]}
 
 # ── Folder endpoints ──────────────────────────────────────────────────────────
 @app.post("/folders", status_code=201)
@@ -291,6 +524,10 @@ def create_folder(req: FolderCreate):
         raise HTTPException(500, "Could not generate unique folder id")
 
     conn.execute("INSERT INTO folders (id, name, parent_id, vault) VALUES (?,?,?,?)", (fid, req.name.strip(), req.parent_id, req.vault))
+
+    # Add order row — new folder goes to bottom of its parent
+    ensure_order_row(conn, req.parent_id, fid, "folder")
+
     conn.commit()
     row = conn.execute("SELECT * FROM folders WHERE id=?", (fid,)).fetchone()
     conn.close()
@@ -330,6 +567,10 @@ def move_folder(fid: str, req: FolderMove):
         raise HTTPException(400, "Cannot move a folder into itself or one of its descendants")
 
     conn.execute("UPDATE folders SET parent_id=? WHERE id=?", (req.parent_id, fid))
+
+    # Move order row to new parent (goes to bottom)
+    move_order_row(conn, req.parent_id, fid, "folder")
+
     conn.commit()
     updated = conn.execute("SELECT * FROM folders WHERE id=?", (fid,)).fetchone()
     conn.close()
@@ -342,6 +583,10 @@ def delete_folder(fid: str):
     if not row:
         conn.close()
         raise HTTPException(404, "Folder not found")
+    # Clean up order rows for this folder's contents
+    conn.execute("DELETE FROM item_order WHERE folder_id=?", (fid,))
+    # Clean up this folder's own order row
+    conn.execute("DELETE FROM item_order WHERE item_id=? AND item_type='folder'", (fid,))
     conn.execute("DELETE FROM folders WHERE id=?", (fid,))
     conn.commit()
     conn.close()
@@ -375,43 +620,21 @@ def folder_path(fid: str):
             current = None
 
     conn.close()
-    chain.reverse() 
+    chain.reverse()
     ancestors = chain[:-1]
     return {"breadcrumb": chain, "ancestors": ancestors}
 
 # ── Contents ──────────────────────────────────────────────────────────────────
 @app.get("/contents")
-def get_contents(folder_id: Optional[str] = Query(default=None), vault: str = Query(default="default"), archived: Optional[bool] = Query(default=None)):
+def get_contents(
+    folder_id: Optional[str] = Query(default=None),
+    vault: str = Query(default="default"),
+    archived: Optional[bool] = Query(default=None)
+):
     conn = get_db()
-    if folder_id:
-        subfolder_rows = conn.execute("SELECT * FROM folders WHERE parent_id=? AND vault=? ORDER BY name", (folder_id, vault)).fetchall()
-    else:
-        subfolder_rows = conn.execute("SELECT * FROM folders WHERE parent_id IS NULL AND vault=? ORDER BY name", (vault,)).fetchall()
-
-    subfolders = []
-    for r in subfolder_rows:
-        d = row_to_dict(r)
-        counts = _folder_counts(conn, d["id"], vault)
-        d.update(counts)
-        subfolders.append(d)
-
-    base_query = "SELECT * FROM bookmarks WHERE vault=? AND "
-    if folder_id:
-        base_query += "folder_id=?"
-        params: tuple = (vault, folder_id)
-    else:
-        base_query += "folder_id IS NULL"
-        params = (vault,)
-
-    if archived is not None:
-        base_query += " AND archived=?"
-        params += (1 if archived else 0,)
-
-    base_query += " ORDER BY created_at DESC"
-    bookmark_rows = conn.execute(base_query, params).fetchall()
-    bookmarks = [enrich_bookmark(conn, r) for r in bookmark_rows]
+    result = get_ordered_contents(conn, folder_id, vault, archived)
     conn.close()
-    return {"current_folder_id": folder_id, "subfolders": subfolders, "bookmarks": bookmarks}
+    return result
 
 # ── Single bookmark updates ───────────────────────────────────────────────────
 @app.patch("/bookmark/{bid}/move")
@@ -423,6 +646,10 @@ def move_bookmark(bid: str, req: BookmarkMove):
         raise HTTPException(404, "Bookmark not found")
     _validate_folder(conn, req.folder_id)
     conn.execute("UPDATE bookmarks SET folder_id=? WHERE id=?", (req.folder_id, bid))
+
+    # Move order row to new folder (goes to bottom)
+    move_order_row(conn, req.folder_id, bid, "bookmark")
+
     conn.commit()
     updated = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
     d = enrich_bookmark(conn, updated)
@@ -471,6 +698,11 @@ def bulk_move(req: BulkMoveRequest):
     existing = conn.execute(f"SELECT id FROM bookmarks WHERE id IN ({placeholders})", req.ids).fetchall()
     found_ids = [r["id"] for r in existing]
     conn.execute(f"UPDATE bookmarks SET folder_id=? WHERE id IN ({placeholders})", [req.folder_id] + found_ids)
+
+    # Move order rows for all bookmarks (each goes to bottom of target folder)
+    for bid in found_ids:
+        move_order_row(conn, req.folder_id, bid, "bookmark")
+
     conn.commit()
     conn.close()
     return {"status": "moved", "count": len(found_ids), "folder_id": req.folder_id}
@@ -506,6 +738,9 @@ def bulk_copy(req: BulkCopyRequest):
 
         for tag in original_tags:
             conn.execute("INSERT OR IGNORE INTO tags (bookmark_id, tag) VALUES (?,?)", (new_bid, tag))
+
+        # New copy goes to bottom of target folder
+        ensure_order_row(conn, req.folder_id, new_bid, "bookmark")
         new_ids.append(new_bid)
 
     conn.commit()
@@ -551,28 +786,26 @@ async def bulk_fetch_archives(req: BulkFetchRequest):
         raise HTTPException(404, "None of the requested bookmarks were found")
 
     successful_ids = []
-    
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(viewport={"width": 1280, "height": 800})
-        
+
         for row in rows:
             bid = row["id"]
             url = row["url"]
             current_html = row["html_path"]
             current_favicon = row["favicon_path"]
             is_archived = row["archived"]
-            
+
             page = await context.new_page()
-            
+
             try:
                 await page.goto(url, timeout=20000, wait_until="networkidle")
-                
-                # 1. ALWAYS Save Physical Screenshot
+
                 ss_path = str(ARCHIVE_DIR / f"{bid}.jpeg")
                 await page.screenshot(path=ss_path, type="jpeg", quality=80, full_page=False)
-                
-                # 2. Extract and Save Favicon
+
                 fav_path = current_favicon
                 try:
                     fav_url = await page.evaluate(JS_GET_FAVICON)
@@ -585,15 +818,14 @@ async def bulk_fetch_archives(req: BulkFetchRequest):
                 except Exception as e:
                     print(f"Failed to fetch favicon for {url}: {e}")
 
-                await page.close() # Free RAM for single-file
-                
-                # 3. OPTIONALLY Save True HTML Archive
+                await page.close()
+
                 html_path = current_html
                 if req.archive:
                     target_path = str(ARCHIVE_DIR / f"{bid}.html")
                     cmd = [
-                        "single-file", 
-                        url, 
+                        "single-file",
+                        url,
                         target_path,
                         "--browser-executable-path", "/usr/bin/chromium"
                     ]
@@ -603,23 +835,22 @@ async def bulk_fetch_archives(req: BulkFetchRequest):
                         stderr=asyncio.subprocess.PIPE
                     )
                     stdout, stderr = await proc.communicate()
-                    
+
                     if proc.returncode == 0:
                         html_path = target_path
                         is_archived = 1
                     else:
                         print(f"single-file failed for {url}: {stderr.decode('utf-8')}")
-                
-                # 4. Update Database
+
                 db = get_db()
                 db.execute("""
-                    UPDATE bookmarks 
+                    UPDATE bookmarks
                     SET screenshot=1, screenshot_path=?, archived=?, html_path=?, favicon_path=?
                     WHERE id=?
                 """, (ss_path, is_archived, html_path, fav_path, bid))
                 db.commit()
                 db.close()
-                
+
                 successful_ids.append(bid)
             except Exception as e:
                 print(f"Failed to bulk-fetch {url}: {e}")
@@ -628,11 +859,11 @@ async def bulk_fetch_archives(req: BulkFetchRequest):
             finally:
                 if not page.is_closed():
                     await page.close()
-                
+
         await browser.close()
-        
+
     return {
-        "status": "completed", 
+        "status": "completed",
         "total_requested": len(req.ids),
         "successful_count": len(successful_ids),
         "successful_ids": successful_ids
@@ -641,24 +872,22 @@ async def bulk_fetch_archives(req: BulkFetchRequest):
 @app.post("/fetch-meta")
 async def fetch_meta(req: FetchMetaRequest):
     norm = normalize_url(req.url)
-    bid = make_id(norm) 
-    
+    bid = make_id(norm)
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await context.new_page()
-        
+
         try:
             await page.goto(req.url, timeout=20000, wait_until="networkidle")
             title = await page.title()
-            
-            # Save physical screenshot
+
             ss_path = str(ARCHIVE_DIR / f"{bid}.jpeg")
             await page.screenshot(path=ss_path, type="jpeg", quality=80, full_page=False)
             screenshot_bytes = Path(ss_path).read_bytes()
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
-            
-            # Extract and Save Favicon
+
             try:
                 fav_url = await page.evaluate(JS_GET_FAVICON)
                 if fav_url:
@@ -669,13 +898,12 @@ async def fetch_meta(req: FetchMetaRequest):
                 print(f"Failed to fetch favicon for {req.url}: {e}")
 
             await page.close()
-            
-            # Optionally Save HTML Archive
+
             if req.archive:
                 html_path = str(ARCHIVE_DIR / f"{bid}.html")
                 cmd = [
-                    "single-file", 
-                    req.url, 
+                    "single-file",
+                    req.url,
                     html_path,
                     "--browser-executable-path", "/usr/bin/chromium"
                 ]
@@ -685,9 +913,9 @@ async def fetch_meta(req: FetchMetaRequest):
                     stderr=asyncio.subprocess.PIPE
                 )
                 await proc.communicate()
-            
+
             return {
-                "title": title, 
+                "title": title,
                 "screenshot": f"data:image/jpeg;base64,{screenshot_b64}"
             }
         except Exception as e:
@@ -703,25 +931,23 @@ async def fetch_bookmark_archive(bid: str, req: BookmarkFetchRequest):
     if not row:
         conn.close()
         raise HTTPException(404, "Bookmark not found")
-    
+
     url = row["url"]
     current_html = row["html_path"]
     current_favicon = row["favicon_path"]
     is_archived = row["archived"]
-    
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(viewport={"width": 1280, "height": 800})
         page = await context.new_page()
-        
+
         try:
             await page.goto(url, timeout=20000, wait_until="networkidle")
-            
-            # 1. Save Physical Screenshot
+
             ss_path = str(ARCHIVE_DIR / f"{bid}.jpeg")
             await page.screenshot(path=ss_path, type="jpeg", quality=80, full_page=False)
 
-            # 2. Extract and Save Favicon
             fav_path = current_favicon
             try:
                 fav_url = await page.evaluate(JS_GET_FAVICON)
@@ -734,15 +960,14 @@ async def fetch_bookmark_archive(bid: str, req: BookmarkFetchRequest):
             except Exception as e:
                 print(f"Failed to fetch favicon for {url}: {e}")
 
-            await page.close() 
-            
-            # 3. Save True HTML Archive
+            await page.close()
+
             html_path = current_html
             if req.archive:
                 target_path = str(ARCHIVE_DIR / f"{bid}.html")
                 cmd = [
-                    "single-file", 
-                    url, 
+                    "single-file",
+                    url,
                     target_path,
                     "--browser-executable-path", "/usr/bin/chromium"
                 ]
@@ -752,28 +977,27 @@ async def fetch_bookmark_archive(bid: str, req: BookmarkFetchRequest):
                     stderr=asyncio.subprocess.PIPE
                 )
                 stdout, stderr = await proc.communicate()
-                
+
                 if proc.returncode == 0:
                     html_path = target_path
                     is_archived = 1
                 else:
                     raise Exception(f"single-file CLI failed: {stderr.decode('utf-8')}")
-            
-            # 4. Update Database
+
             conn.execute("""
-                UPDATE bookmarks 
+                UPDATE bookmarks
                 SET screenshot=1, screenshot_path=?, archived=?, html_path=?, favicon_path=?
                 WHERE id=?
             """, (ss_path, is_archived, html_path, fav_path, bid))
             conn.commit()
-            
+
         except Exception as e:
             conn.close()
             raise HTTPException(500, f"Failed to fetch page: {str(e)}")
         finally:
             if not browser.is_connected():
                 await browser.close()
-            
+
     updated = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
     d = enrich_bookmark(conn, updated)
     conn.close()
@@ -806,43 +1030,39 @@ def save(req: SaveRequest):
     if req.folder_id:
         _validate_folder(conn, req.folder_id)
 
-    existing = conn.execute("SELECT id FROM bookmarks WHERE url_normalized=?", (norm,)).fetchone()
+    existing = conn.execute("SELECT id, folder_id FROM bookmarks WHERE url_normalized=?", (norm,)).fetchone()
 
     ss_path = html_path = fav_path = None
 
-    # --- SCREENSHOT HANDLING ---
-    if req.screenshot_data: 
+    if req.screenshot_data:
         try:
             raw = base64.b64decode(req.screenshot_data.split(",")[-1])
             ss_path = str(ARCHIVE_DIR / f"{bid}.jpeg")
             Path(ss_path).write_bytes(raw)
         except Exception as e:
             print(f"Screenshot save failed: {e}")
-    else: 
+    else:
         potential_ss = ARCHIVE_DIR / f"{bid}.jpeg"
         if potential_ss.exists():
             ss_path = str(potential_ss)
 
-    # --- HTML ARCHIVE HANDLING ---
     if req.archive:
-        if req.html_data: 
+        if req.html_data:
             try:
                 raw = base64.b64decode(req.html_data)
                 html_path = str(ARCHIVE_DIR / f"{bid}.html")
                 Path(html_path).write_bytes(raw)
             except Exception as e:
                 print(f"HTML archive save failed: {e}")
-        else: 
+        else:
             potential_html = ARCHIVE_DIR / f"{bid}.html"
             if potential_html.exists():
                 html_path = str(potential_html)
 
-    # --- FAVICON HANDLING ---
     potential_fav = FAVICON_DIR / f"{bid}.ico"
     if potential_fav.exists():
-        fav_path = str(potential_fav) # Pick up what /fetch-meta saved
+        fav_path = str(potential_fav)
     elif req.favicon_url:
-        # Download natively using urllib if passed from the popup.html
         if req.favicon_url.startswith("data:image"):
             try:
                 header, encoded = req.favicon_url.split(",", 1)
@@ -863,6 +1083,7 @@ def save(req: SaveRequest):
     favicon_url = (req.favicon_url or "").strip()
 
     if existing:
+        old_folder_id = existing["folder_id"]
         conn.execute("""
             UPDATE bookmarks SET
                 title=?, vault=?, archived=?, screenshot=?,
@@ -874,6 +1095,9 @@ def save(req: SaveRequest):
             1 if ss_path else 0,
             html_path, ss_path, fav_path, req.notes, req.folder_id, favicon_url, bid,
         ))
+        # If folder changed, update order row
+        if old_folder_id != req.folder_id:
+            move_order_row(conn, req.folder_id, bid, "bookmark")
         action = "updated"
     else:
         conn.execute("""
@@ -887,6 +1111,8 @@ def save(req: SaveRequest):
             1 if ss_path else 0,
             html_path, ss_path, fav_path, req.notes, req.folder_id, favicon_url,
         ))
+        # New bookmark goes to bottom of its folder
+        ensure_order_row(conn, req.folder_id, bid, "bookmark")
         action = "saved"
 
     conn.execute("DELETE FROM tags WHERE bookmark_id=?", (bid,))
@@ -920,6 +1146,7 @@ def delete_bookmark(bid: str):
         if p and Path(p).exists():
             Path(p).unlink()
     conn.execute("DELETE FROM tags WHERE bookmark_id=?", (bid,))
+    conn.execute("DELETE FROM item_order WHERE item_id=? AND item_type='bookmark'", (bid,))
     conn.execute("DELETE FROM bookmarks WHERE id=?", (bid,))
     conn.commit()
     conn.close()
@@ -933,11 +1160,10 @@ def search(
     limit: int = 50,
 ):
     conn = get_db()
-    
-    # Escape double quotes and wrap in quotes to prevent FTS5 syntax errors
+
     safe_q = q.replace('"', '""')
-    fts_query = f'"{safe_q}"*' # The * allows for partial word matches
-    
+    fts_query = f'"{safe_q}"*'
+
     if vault and folder_id:
         rows = conn.execute("""
             SELECT b.* FROM bookmarks b
