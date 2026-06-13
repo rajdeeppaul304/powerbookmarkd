@@ -1,19 +1,19 @@
 // popup.js — PowerBookmark popup controller
 const API = "http://127.0.0.1:8765";
 
-let currentTab  = null;
-let bookmarkId  = null;
-let isSaved     = false;
+let currentTab = null;
+let bookmarkId = null;
+let isSaved = false;
 
 // ── Save-tab Folder Navigator State ───────────────────────────────────────
-let fnavStack        = [{ id: null, name: "Root" }];
+let fnavStack = [{ id: null, name: "Root" }];
 let fnavCurrentItems = [];
-let fnavSelected     = null;   // { id, name } or null = root
+let fnavSelected = null;   // { id, name } or null = root
 
 // ── Explorer-tab State ─────────────────────────────────────────────────────
-let expStack        = [{ id: null, name: "Root" }];
-let expSearchTimer  = null;
-let expSearchMode   = false;
+let expStack = [{ id: null, name: "Root" }];
+let expSearchTimer = null;
+let expSearchMode = false;
 
 // ── Last-folder memory key ─────────────────────────────────────────────────
 const LAST_FOLDER_KEY = "pb_last_folder"; // { vault, folder_id, folder_name }
@@ -30,7 +30,7 @@ async function init() {
   currentTab = tab;
 
   el("pageTitle").textContent = tab.title || "Untitled";
-  el("pageUrl").textContent   = tab.url   || "";
+  el("pageUrl").textContent = tab.url || "";
 
   // Check service health
   try {
@@ -82,9 +82,9 @@ async function init() {
 // ═══════════════════════════════════════════════════════════════════════════
 async function loadVaults() {
   try {
-    const res  = await fetch(`${API}/vaults`);
+    const res = await fetch(`${API}/vaults`);
     const data = await res.json();
-    const sel  = el("vaultSelect");
+    const sel = el("vaultSelect");
     sel.innerHTML = "";
     const defaults = ["default", "research", "work", "personal", "read-later"];
     const existing = new Set(data.vaults.map(v => v.name));
@@ -96,7 +96,7 @@ async function loadVaults() {
         : ""}`;
       sel.appendChild(opt);
     });
-  } catch {}
+  } catch { }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -106,8 +106,8 @@ async function saveLastFolder() {
   try {
     await chrome.storage.local.set({
       [LAST_FOLDER_KEY]: {
-        vault:       el("vaultSelect").value,
-        folder_id:   fnavSelected?.id   ?? null,
+        vault: el("vaultSelect").value,
+        folder_id: fnavSelected?.id ?? null,
         folder_name: fnavSelected?.name ?? null,
       },
     });
@@ -119,11 +119,11 @@ async function saveLastFolder() {
 async function restoreLastFolder() {
   try {
     const stored = await chrome.storage.local.get(LAST_FOLDER_KEY);
-    const last   = stored[LAST_FOLDER_KEY];
+    const last = stored[LAST_FOLDER_KEY];
     if (!last) return;
 
     // Set vault — select is already populated
-    const sel   = el("vaultSelect");
+    const sel = el("vaultSelect");
     const match = [...sel.options].find(o => o.value === last.vault);
     if (match) sel.value = last.vault;
 
@@ -152,7 +152,7 @@ function fnavWireEvents() {
   el("fnavCreateCancel").addEventListener("click", fnavHideCreate);
 
   el("fnavNameInput").addEventListener("keydown", e => {
-    if (e.key === "Enter")  fnavCreateFolder();
+    if (e.key === "Enter") fnavCreateFolder();
     if (e.key === "Escape") fnavHideCreate();
   });
 
@@ -171,13 +171,13 @@ function fnavWireEvents() {
 function fnavHideCreate() {
   el("fnavCreateWrap").classList.remove("show");
   el("fnavNew").style.display = "";
-  el("fnavNameInput").value   = "";
+  el("fnavNameInput").value = "";
 }
 
 function fnavReset() {
-  fnavStack        = [{ id: null, name: "Root" }];
+  fnavStack = [{ id: null, name: "Root" }];
   fnavCurrentItems = [];
-  fnavSelected     = null;
+  fnavSelected = null;
   fnavRenderDestination();
 }
 
@@ -198,7 +198,7 @@ async function fnavNavigateTo(folder_id, folder_name) {
   try {
     const params = new URLSearchParams({ vault });
     if (folder_id) params.set("folder_id", folder_id);
-    const res  = await fetch(`${API}/contents?${params}`);
+    const res = await fetch(`${API}/contents?${params}`);
     const data = await res.json();
     fnavCurrentItems = data.subfolders || [];
   } catch {
@@ -222,7 +222,7 @@ function fnavGoBack() {
 function fnavRenderSelectCurrent() {
   const cur = fnavStack[fnavStack.length - 1];
   let btn = el("fnavSelectCurrent");
-  
+
   if (!btn) {
     btn = document.createElement("button");
     btn.id = "fnavSelectCurrent";
@@ -286,7 +286,7 @@ function fnavRenderList() {
     row.className = "fnav-row";
     // Make the whole row behave like a button
     row.style.cursor = "pointer";
-    
+
     // NAVIGATION TRIGGER: Clicking anywhere in the row (except the select button)
     row.addEventListener("click", (e) => {
       // If the target is the select button, don't navigate
@@ -296,21 +296,21 @@ function fnavRenderList() {
 
     const icon = document.createElement("span");
     icon.className = "fnav-row-icon"; icon.textContent = "📁";
-    
+
     const name = document.createElement("span");
-    name.className = "fnav-row-name"; 
+    name.className = "fnav-row-name";
     name.textContent = f.name;
-    
+
     const selBtn = document.createElement("button");
     selBtn.className = "fnav-row-select" + (fnavSelected?.id === f.id ? " selected" : "");
     selBtn.textContent = fnavSelected?.id === f.id ? "✓" : "Select";
-    
+
     // We keep the listener here to explicitly handle the selection
     selBtn.addEventListener("click", (e) => {
       e.stopPropagation(); // Very important: stops the click from bubbling up to the row
       fnavSelectFolder(f);
     });
-    
+
     row.append(icon, name, selBtn);
     list.appendChild(row);
   }
@@ -318,7 +318,7 @@ function fnavRenderList() {
 
 function fnavSelectFolder(f) {
   const cur = fnavStack[fnavStack.length - 1];
-  
+
   if (fnavSelected?.id === f.id) {
     // Toggling OFF a subfolder reverts back to our physical location
     fnavSelected = { id: cur.id, name: cur.name };
@@ -326,7 +326,7 @@ function fnavSelectFolder(f) {
     // Toggling ON selects the specific target
     fnavSelected = { id: f.id, name: f.name };
   }
-  
+
   fnavRenderList();
   fnavRenderDestination();
   fnavRenderSelectCurrent();
@@ -339,7 +339,7 @@ function fnavRenderDestination() {
 async function fnavCreateFolder() {
   const name = el("fnavNameInput").value.trim();
   if (!name) return;
-  const vault     = el("vaultSelect").value;
+  const vault = el("vaultSelect").value;
   const parent_id = fnavStack[fnavStack.length - 1].id || null;
   el("fnavCreateOk").disabled = true;
   try {
@@ -362,7 +362,7 @@ async function fnavCreateFolder() {
 async function fnavRestoreFolder(folder_id, vault) {
   if (!folder_id) { fnavReset(); await fnavNavigateTo(null, "Root"); return; }
   try {
-    const res  = await fetch(`${API}/folders/${folder_id}/path`);
+    const res = await fetch(`${API}/folders/${folder_id}/path`);
     if (!res.ok) throw new Error("folder not found");
     const data = await res.json();
 
@@ -399,27 +399,27 @@ async function fnavRestoreFolder(folder_id, vault) {
 async function lookupCurrent() {
   if (!currentTab?.url) return;
   try {
-    const res  = await fetch(`${API}/lookup?url=${encodeURIComponent(currentTab.url)}`);
+    const res = await fetch(`${API}/lookup?url=${encodeURIComponent(currentTab.url)}`);
     const data = await res.json();
-    isSaved    = data.exists;
+    isSaved = data.exists;
     bookmarkId = data.bookmark_id || null;
 
     if (isSaved) {
       const bRes = await fetch(`${API}/bookmark/${bookmarkId}`);
-      const bm   = await bRes.json();
-      el("vaultSelect").value  = bm.vault || "default";
-      el("tagsInput").value    = (bm.tags || []).join(", ");
-      el("notesInput").value   = bm.notes || "";
+      const bm = await bRes.json();
+      el("vaultSelect").value = bm.vault || "default";
+      el("tagsInput").value = (bm.tags || []).join(", ");
+      el("notesInput").value = bm.notes || "";
       el("chkArchive").checked = !!bm.archived;
       syncToggle("toggleArchive", "chkArchive");
       await fnavRestoreFolder(bm.folder_id || null, bm.vault || "default");
-      el("btnSave").textContent     = "Update Bookmark";
+      el("btnSave").textContent = "Update Bookmark";
       el("btnDelete").style.display = "inline-block";
       el("dupWarning").classList.add("show");
       updateStatusChip(bm.archived ? "archived" : "saved");
     } else {
       await restoreLastFolder();
-      el("btnSave").textContent     = "Save Bookmark";
+      el("btnSave").textContent = "Save Bookmark";
       el("btnDelete").style.display = "none";
       el("dupWarning").classList.remove("show");
       updateStatusChip("unsaved");
@@ -443,7 +443,7 @@ function expWireEvents() {
     }
   });
 
-  el("btnSearchLocal").addEventListener("click",  () => expDoSearch("local"));
+  el("btnSearchLocal").addEventListener("click", () => expDoSearch("local"));
   el("btnSearchGlobal").addEventListener("click", () => expDoSearch("global"));
 }
 
@@ -464,12 +464,19 @@ async function expNavigateTo(folder_id, folder_name) {
   expRenderLoading();
 
   try {
-    const vault  = el("vaultSelect").value;
+    const vault = el("vaultSelect").value;
     const params = new URLSearchParams({ vault });
     if (folder_id) params.set("folder_id", folder_id);
-    const res  = await fetch(`${API}/contents?${params}`);
+    const res = await fetch(`${API}/contents?${params}`);
     const data = await res.json();
-    expRenderContents(data.subfolders || [], data.bookmarks || []);
+
+    if (data.ordered_items && data.ordered_items.length) {
+      const folders = data.ordered_items.filter(i => i.item_type === "folder");
+      const bookmarks = data.ordered_items.filter(i => i.item_type === "bookmark");
+      expRenderContents(folders, bookmarks);
+    } else {
+      expRenderContents(data.subfolders || [], data.bookmarks || []);
+    }
   } catch {
     expRenderError();
   }
@@ -491,7 +498,7 @@ async function expDoSearch(scope) {
   expRenderLoading();
 
   try {
-    const vault  = el("vaultSelect").value;
+    const vault = el("vaultSelect").value;
     const params = new URLSearchParams({ q, vault, limit: 50 });
 
     if (scope === "local") {
@@ -499,7 +506,7 @@ async function expDoSearch(scope) {
       if (curId) params.set("folder_id", curId);
     }
 
-    const res  = await fetch(`${API}/search?${params}`);
+    const res = await fetch(`${API}/search?${params}`);
     const data = await res.json();
     expRenderSearchResults(data.results || [], q, scope);
   } catch {
@@ -532,7 +539,7 @@ function expRenderBreadcrumb() {
 }
 
 function expRenderSearchBtns(searching, activeScope) {
-  el("btnSearchLocal").classList.toggle("active-scope",  searching && activeScope === "local");
+  el("btnSearchLocal").classList.toggle("active-scope", searching && activeScope === "local");
   el("btnSearchGlobal").classList.toggle("active-scope", searching && activeScope === "global");
 }
 
@@ -608,7 +615,7 @@ function expMakeFolderRow(f) {
   // Build count string from API-provided counts
   const parts = [];
   const sf = f.subfolder_count || 0;
-  const bm = f.bookmark_count  || 0;
+  const bm = f.bookmark_count || 0;
   if (sf) parts.push(`${sf} folder${sf !== 1 ? "s" : ""}`);
   if (bm) parts.push(`${bm} bookmark${bm !== 1 ? "s" : ""}`);
   meta.textContent = parts.length ? parts.join(" · ") : "Empty";
@@ -650,9 +657,9 @@ function expMakeBookmarkRow(bm, showFolder = false) {
 
   // 2. Build the URL row with the tiny Favicon injected next to it
   const url = document.createElement("div");
-  url.className = "exp-row-url"; 
+  url.className = "exp-row-url";
   url.style.cssText = "display:flex;align-items:center;gap:6px;";
-  
+
   let favHtml = `<span style="font-size:11px;opacity:0.7">🌐</span>`;
   if (bm.favicon_path) {
     favHtml = `<img src="${API}/static/favicons/${bm.id}.ico" style="width:12px;height:12px;object-fit:contain;border-radius:2px;" onerror="this.style.display='none'">`;
@@ -690,14 +697,14 @@ function appendFaviconOrIcon(container, bm) {
     // Try the locally archived icon first, otherwise use the live web URL
     img.src = bm.favicon_path ? `${API}/static/favicons/${bm.id}.ico` : bm.favicon_url;
     img.style.cssText = "width:20px;height:20px;object-fit:contain;border-radius:3px";
-    
+
     img.onerror = () => {
       // If the local file failed but we have a live URL, try the live URL
       if (bm.favicon_path && bm.favicon_url && !img.src.includes(bm.favicon_url)) {
         img.src = bm.favicon_url;
       } else {
         // If everything fails, show the default text icon
-        container.innerHTML = ""; 
+        container.innerHTML = "";
         container.textContent = "🔖";
       }
     };
@@ -732,17 +739,17 @@ function syncToggle(labelId, chkId) {
   el(labelId).classList.toggle("on", el(chkId).checked);
 }
 el("chkScreenshot").addEventListener("change", () => syncToggle("toggleScreenshot", "chkScreenshot"));
-el("chkArchive").addEventListener("change",    () => syncToggle("toggleArchive",    "chkArchive"));
+el("chkArchive").addEventListener("change", () => syncToggle("toggleArchive", "chkArchive"));
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SAVE
 // ═══════════════════════════════════════════════════════════════════════════
 el("btnSave").addEventListener("click", async () => {
-  el("btnSave").disabled    = true;
+  el("btnSave").disabled = true;
   el("btnSave").textContent = "Saving…";
   updateStatusChip("loading");
 
-  const tags      = el("tagsInput").value.split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
+  const tags = el("tagsInput").value.split(",").map(t => t.trim().toLowerCase()).filter(Boolean);
   const folder_id = fnavSelected?.id || null;
 
   try {
@@ -755,8 +762,8 @@ el("btnSave").addEventListener("click", async () => {
 
     if (res.success) {
       bookmarkId = res.id;
-      isSaved    = true;
-      el("btnSave").textContent     = "Update Bookmark";
+      isSaved = true;
+      el("btnSave").textContent = "Update Bookmark";
       el("btnDelete").style.display = "inline-block";
       el("dupWarning").classList.add("show");
       updateStatusChip(el("chkArchive").checked ? "archived" : "saved");
@@ -784,7 +791,7 @@ el("btnDelete").addEventListener("click", async () => {
     if (res.success) {
       bookmarkId = null; isSaved = false; fnavSelected = null;
       fnavRenderDestination(); fnavRenderList();
-      el("btnSave").textContent     = "Save Bookmark";
+      el("btnSave").textContent = "Save Bookmark";
       el("btnDelete").style.display = "none";
       el("dupWarning").classList.remove("show");
       el("tagsInput").value = ""; el("notesInput").value = "";
@@ -804,7 +811,7 @@ function toast(msg, dur = 2000) {
 }
 function el(id) { return document.getElementById(id); }
 function escHtml(str = "") {
-  return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────
