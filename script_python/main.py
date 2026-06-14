@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import shutil
 
 from playwright.async_api import async_playwright
 
@@ -316,8 +317,15 @@ class SetFolderOrderRequest(BaseModel):
     """
     folder_id: Optional[str] = None
     items: List[OrderItem]
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
+class BulkFolderMoveRequest(BaseModel):
+    ids: List[str]
+    target_parent_id: Optional[str] = None
+    
+class BulkDeleteRequest(BaseModel):
+    bookmark_ids: list[str]
+    folder_ids: list[str]
+    
+    # ── Helpers ───────────────────────────────────────────────────────────────────
 def row_to_dict(row) -> dict:
     return dict(row)
 
@@ -689,6 +697,44 @@ def patch_notes(bid: str, req: BookmarkNotesPatch):
     return d
 
 # ── Bulk operations ───────────────────────────────────────────────────────────
+
+@app.post("/folders/bulk-move")
+def bulk_move_folders(req: BulkFolderMoveRequest):
+    if not req.ids: raise HTTPException(400, "ids list is empty")
+    conn = get_db()
+
+    # 1. Validate the target parent exists
+    if req.target_parent_id is not None:
+        parent = conn.execute("SELECT id FROM folders WHERE id=?", (req.target_parent_id,)).fetchone()
+        if not parent:
+            conn.close()
+            raise HTTPException(404, f"Target parent folder '{req.target_parent_id}' not found")
+
+    # 2. Safety Check: Prevent moving any folder into itself or its own descendants
+    for fid in req.ids:
+        descendants = descendant_folder_ids(conn, fid)
+        if req.target_parent_id in descendants:
+            conn.close()
+            raise HTTPException(400, "Cannot move a folder into itself or one of its descendants")
+
+    # 3. Find the valid folders
+    placeholders = ",".join("?" * len(req.ids))
+    existing = conn.execute(f"SELECT id FROM folders WHERE id IN ({placeholders})", req.ids).fetchall()
+    found_ids = [r["id"] for r in existing]
+
+    # 4. Update the DB
+    if found_ids:
+        conn.execute(f"UPDATE folders SET parent_id=? WHERE id IN ({placeholders})", [req.target_parent_id] + found_ids)
+        
+        # Move order rows so they appear at the bottom of the new parent folder
+        for fid in found_ids:
+            move_order_row(conn, req.target_parent_id, fid, "folder")
+
+    conn.commit()
+    conn.close()
+    return {"status": "moved", "count": len(found_ids), "parent_id": req.target_parent_id}
+
+
 @app.post("/bookmarks/bulk-move")
 def bulk_move(req: BulkMoveRequest):
     if not req.ids: raise HTTPException(400, "ids list is empty")
@@ -709,6 +755,7 @@ def bulk_move(req: BulkMoveRequest):
 
 @app.post("/bookmarks/bulk-copy")
 def bulk_copy(req: BulkCopyRequest):
+    print("copy was called")
     if not req.ids: raise HTTPException(400, "ids list is empty")
     conn = get_db()
     _validate_folder(conn, req.folder_id)
@@ -725,21 +772,60 @@ def bulk_copy(req: BulkCopyRequest):
         new_bid = make_id(seed)
         new_norm = d["url_normalized"] + f"#copy-{new_bid}"
 
+        # --- PHYSICAL FILE COPY LOGIC ---
+        # 1. Handle Screenshot File
+        new_screenshot_path = None
+        if d.get("screenshot_path"):
+            old_p = Path(d["screenshot_path"])
+            if old_p.exists():
+                new_p = old_p.with_name(f"{new_bid}{old_p.suffix}")
+                shutil.copy2(old_p, new_p)
+                new_screenshot_path = str(new_p)
+
+        # 2. Handle Offline HTML Cache File
+        new_html_path = None
+        if d.get("html_path"):
+            old_p = Path(d["html_path"])
+            if old_p.exists():
+                new_p = old_p.with_name(f"{new_bid}{old_p.suffix}")
+                shutil.copy2(old_p, new_p)
+                new_html_path = str(new_p)
+
+        # 3. Handle Favicon File
+        new_favicon_path = None
+        if d.get("favicon_path"):
+            old_p = Path(d["favicon_path"])
+            if old_p.exists():
+                new_p = old_p.with_name(f"{new_bid}{old_p.suffix}")
+                shutil.copy2(old_p, new_p)
+                new_favicon_path = str(new_p)
+
+        # Insert into database using the freshly generated unique asset paths
         conn.execute("""
             INSERT OR IGNORE INTO bookmarks
                 (id, url, url_normalized, title, vault, created_at,
                  archived, screenshot, html_path, screenshot_path, notes, folder_id, favicon_url, favicon_path)
-            VALUES (?,?,?,?,?,?,0,0,NULL,NULL,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            new_bid, d["url"], new_norm, d["title"],
-            target_vault, now, d["notes"], req.folder_id,
-            d.get("favicon_url", ""), d.get("favicon_path", "")
+            new_bid, 
+            d["url"], 
+            new_norm, 
+            d["title"],
+            target_vault, 
+            now, 
+            d.get("archived", 0),
+            d.get("screenshot", 0),
+            new_html_path,          # Points to the brand new cloned HTML file
+            new_screenshot_path,    # Points to the brand new cloned image file
+            d["notes"], 
+            req.folder_id,
+            d.get("favicon_url", ""), 
+            new_favicon_path        # Points to the brand new cloned favicon file
         ))
 
         for tag in original_tags:
             conn.execute("INSERT OR IGNORE INTO tags (bookmark_id, tag) VALUES (?,?)", (new_bid, tag))
 
-        # New copy goes to bottom of target folder
         ensure_order_row(conn, req.folder_id, new_bid, "bookmark")
         new_ids.append(new_bid)
 
@@ -749,6 +835,8 @@ def bulk_copy(req: BulkCopyRequest):
     results = [enrich_bookmark(conn, r) for r in new_rows]
     conn.close()
     return {"status": "copied", "count": len(results), "bookmarks": results}
+
+
 
 @app.post("/bookmarks/bulk-tag")
 def bulk_tag(req: BulkTagRequest):
@@ -1138,16 +1226,79 @@ def get_bookmark(bid: str):
 @app.delete("/bookmark/{bid}")
 def delete_bookmark(bid: str):
     conn = get_db()
-    row  = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
+    
+    # Use row_factory or access by column name depending on your setup.
+    # Assuming row can be accessed like a dictionary or by string keys.
+    row = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
     if not row:
+        conn.close()  # Prevent database connection leak on 404
         raise HTTPException(404, "Bookmark not found")
+        
+    # Convert row to dict if you are using standard sqlite3 rows without row_factory
+    # d = dict(row) or just use row["column"] if row_factory is set to sqlite3.Row
+    d = dict(row) if not isinstance(row, dict) else row
+
     for col in ("screenshot_path", "html_path", "favicon_path"):
-        p = row[col]
-        if p and Path(p).exists():
-            Path(p).unlink()
+        p = d.get(col)
+        if p:
+            # SAFETY CHECK: Count how many OTHER bookmarks are using this exact file
+            shared_count = conn.execute(
+                f"SELECT COUNT(*) FROM bookmarks WHERE {col} = ? AND id != ?", 
+                (p, bid)
+            ).fetchone()[0]
+            
+            # Only delete the physical file if no one else is using it!
+            if shared_count == 0 and Path(p).exists():
+                Path(p).unlink()
+
+    # Clean up relational data
     conn.execute("DELETE FROM tags WHERE bookmark_id=?", (bid,))
     conn.execute("DELETE FROM item_order WHERE item_id=? AND item_type='bookmark'", (bid,))
     conn.execute("DELETE FROM bookmarks WHERE id=?", (bid,))
+    
+    conn.commit()
+    conn.close()
+    return {"status": "deleted"}
+    
+
+@app.post("/items/bulk-delete")
+def bulk_delete(req: BulkDeleteRequest):
+    conn = get_db()
+    
+    # 1. Clean up Bookmarks & physical drive files safely
+    if req.bookmark_ids:
+        placeholders = ",".join("?" * len(req.bookmark_ids))
+        
+        # Grab the paths BEFORE deleting the rows
+        rows = conn.execute(
+            f"SELECT screenshot_path, html_path, favicon_path FROM bookmarks WHERE id IN ({placeholders})", 
+            req.bookmark_ids
+        ).fetchall()
+        
+        # Delete from DB first
+        conn.execute(f"DELETE FROM tags WHERE bookmark_id IN ({placeholders})", req.bookmark_ids)
+        conn.execute(f"DELETE FROM item_order WHERE item_id IN ({placeholders}) AND item_type='bookmark'", req.bookmark_ids)
+        conn.execute(f"DELETE FROM bookmarks WHERE id IN ({placeholders})", req.bookmark_ids)
+
+        # Now safely delete physical files ONLY if no remaining bookmarks reference them
+        for row in rows:
+            for col, path_str in zip(["screenshot_path", "html_path", "favicon_path"], row):
+                if path_str:
+                    in_use = conn.execute(f"SELECT 1 FROM bookmarks WHERE {col} = ?", (path_str,)).fetchone()
+                    if not in_use and Path(path_str).exists():
+                        Path(path_str).unlink()
+
+    # 2. Clean up Folders & fix nested items
+    if req.folder_ids:
+        placeholders = ",".join("?" * len(req.folder_ids))
+        conn.execute(f"DELETE FROM item_order WHERE folder_id IN ({placeholders})", req.folder_ids)
+        conn.execute(f"DELETE FROM item_order WHERE item_id IN ({placeholders}) AND item_type='folder'", req.folder_ids)
+        conn.execute(f"DELETE FROM folders WHERE id IN ({placeholders})", req.folder_ids)
+        
+        # Keep child contents visible by setting parent context references to root
+        conn.execute(f"UPDATE bookmarks SET folder_id = NULL WHERE folder_id IN ({placeholders})", req.folder_ids)
+        conn.execute(f"UPDATE folders SET parent_id = NULL WHERE parent_id IN ({placeholders})", req.folder_ids)
+
     conn.commit()
     conn.close()
     return {"status": "deleted"}
