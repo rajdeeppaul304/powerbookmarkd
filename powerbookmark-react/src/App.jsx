@@ -20,9 +20,10 @@ import MassCopyModal from './components/MassCopyModal';
 import MassMoveModal from './components/MassMoveModal';
 import ArchiveViewer from './components/ArchiveViewer';
 import JobWidget from './components/JobWidget';
-
+import ContextMenu from './components/ContextMenu';
 export default function App() {
-  const { loadInitialData, isLoading, error, selectedBookmarks, moveBookmarksToFolder } = useStore();
+const { loadInitialData, isLoading, error, selectedBookmarks, 
+        moveBookmarksToFolder, contextMenu, setContextMenu } = useStore();
   const [activeDragId, setActiveDragId] = useState(null);
 
   const location = useLocation();
@@ -154,6 +155,15 @@ return (
       <MassMoveModal />
       <ArchiveViewer />     
       <JobWidget />
+
+      {useStore.getState().contextMenu && (
+        <ContextMenu 
+          x={useStore.getState().contextMenu.x} 
+          y={useStore.getState().contextMenu.y} 
+          options={useStore.getState().contextMenu.options} 
+          onClose={() => useStore.getState().setContextMenu(null)} 
+        />
+      )}
       
        <DragOverlay modifiers={[snapCenterToCursor]}>
         {activeDragId ? (() => {

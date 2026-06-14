@@ -1,10 +1,11 @@
 // src/components/MainArea.jsx
-import React, { useMemo, useEffect } from 'react'; // <--- Added React here!
+import React, { useMemo, useEffect, useState } from 'react'; // <--- Added React here!
 import { useStore } from '../store';
 import BookmarkCard from './BookmarkCard';
 import BookmarkRow from './BookmarkRow'; // <--- Import it
 import FolderCard from './FolderCard'; // <--- NEW
 import FolderRow from './FolderRow'; // <--- NEW
+import ContextMenu from './ContextMenu';
 import { useDroppable } from '@dnd-kit/core'; // <--- ADD THIS
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { api } from '../api';
@@ -38,8 +39,8 @@ function DroppableCrumb({ folderId, name, isLast }) {
 }
 
 export default function MainArea() {
-    const { bookmarks, folders, currentFilter, activeVault, sortMode, setSortMode, searchQuery, viewMode, selectedBookmarks, selectedFolders, setSelection, clearSelection,
-        renameFolder, setDetailBookmark } = useStore();
+    const { setContextMenu, bookmarks, folders, currentFilter, activeVault, sortMode, setSortMode, searchQuery, viewMode, selectedBookmarks, selectedFolders, setSelection, clearSelection,
+        renameFolder, setDetailBookmark, setNewBookmarkOpen, setNewFolderOpen} = useStore();
 
 
     // Instantly fetch the correct DB order for this specific view!
@@ -53,6 +54,23 @@ export default function MainArea() {
     }, [currentFilter.value, currentFilter.type]);
     // This block completely replaces your vanilla `getFiltered()` function!
     // useMemo ensures it only recalculates when bookmarks, filter, sort, or search changes.
+    const handleBackgroundContextMenu = (e) => {
+    e.preventDefault(); 
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      options: [
+        { label: '➕ Add Bookmark', action: () => setNewBookmarkOpen(true) }, // <-- Now this works!
+        { 
+  label: '📁 Add Folder', 
+  action: () => setNewFolderOpen(true)
+}
+      ]
+    });
+  };
+
+
+
 
     // --- F2 KEYBOARD SHORTCUT ---
     useEffect(() => {
@@ -201,7 +219,10 @@ export default function MainArea() {
 
 
     return (
-        <main className="main">
+        <main className="main" 
+        onContextMenu={handleBackgroundContextMenu}
+        style={{ minHeight: '100%', paddingBottom: '100px' }} // Ensures the background is clickable even if empty
+        >
             <div className="main-header" style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '16px', minHeight: '36px' }}>
 
                 {['folder', 'root'].includes(currentFilter.type) ? (
@@ -284,6 +305,7 @@ export default function MainArea() {
                     </div>
                 )}
             </div>
+
         </main>
     );
 }

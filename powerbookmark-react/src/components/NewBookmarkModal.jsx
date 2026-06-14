@@ -1,23 +1,34 @@
 // src/components/NewBookmarkModal.jsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '../store';
 import { api } from '../api';
 
 export default function NewBookmarkModal() {
-  const { isNewBookmarkOpen, setNewBookmarkOpen, currentFilter, vaults, folders, addBookmark } = useStore();
-  
+  const { isNewBookmarkOpen, setNewBookmarkOpen, currentFilter, activeVault, vaults, folders, addBookmark } = useStore();
+
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
   const [tags, setTags] = useState('');
   const [notes, setNotes] = useState('');
   const [doArchive, setDoArchive] = useState(false);
-  const [targetFolder, setTargetFolder] = useState(currentFilter.type === 'folder' ? currentFilter.value : '');
-  const [targetVault, setTargetVault] = useState(currentFilter.type === 'vault' ? currentFilter.value : (vaults[0]?.name || 'default'));
-  
+
+  const [targetFolder, setTargetFolder] = useState('');
+  const [targetVault, setTargetVault] = useState(vaults[0]?.name || 'default');
+
   const [isFetching, setIsFetching] = useState(false);
   const [fetchedImage, setFetchedImage] = useState(null);
 
-  if (!isNewBookmarkOpen) return null;
+
+  useEffect(() => {
+  if (isNewBookmarkOpen) {
+    setTargetFolder(currentFilter.type === 'folder' ? currentFilter.value : '');
+    setTargetVault(
+      currentFilter.type === 'vault' ? currentFilter.value : activeVault  // ← use activeVault not vaults[0]
+    );
+  }
+}, [isNewBookmarkOpen]);
+
+
 
   const handleFetch = async () => {
     if (!url.startsWith('http')) return;
@@ -34,23 +45,27 @@ export default function NewBookmarkModal() {
   };
 
   const handleSave = async () => {
-    if (!url.trim()) return;
-    
+    // 1. The Strict Validation
+    if (!url.trim() || !title.trim()) {
+      alert("⚠️ Both URL and Title are required!");
+      return;
+    }
+
     const parsedTags = tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
     const body = {
-      url, title: title || url, vault: targetVault, tags: parsedTags, notes,
+      url, title: title.trim(), vault: targetVault, tags: parsedTags, notes,
       folder_id: targetFolder || null, screenshot: !!fetchedImage, archive: doArchive
     };
 
     try {
       const saved = await api.saveBookmark(body);
-      
+
       // Inject the optimistic object immediately
       addBookmark({
         id: saved.id, ...body, created_at: new Date().toISOString(),
         html_path: doArchive ? 'ready' : null, favicon_path: 'ready'
       });
-      
+
       closeModal();
     } catch (err) {
       alert("Failed to save: " + err.message);
@@ -62,6 +77,9 @@ export default function NewBookmarkModal() {
     setNewBookmarkOpen(false);
   };
 
+    if (!isNewBookmarkOpen) return null;
+
+
   return (
     <div className="modal-overlay open">
       <div className="modal-box" style={{ width: 480 }}>
@@ -70,7 +88,7 @@ export default function NewBookmarkModal() {
           <button className="modal-close-btn" onClick={closeModal}>✕</button>
         </div>
         <div className="modal-body" style={{ padding: '16px 18px' }}>
-          
+
           <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
             <div style={{ flex: 1 }}>
               <div className="detail-field">
@@ -83,15 +101,15 @@ export default function NewBookmarkModal() {
                 </div>
               </div>
               <div className="detail-field">
-                <div className="detail-field-label">Title</div>
+                <div className="detail-field-label">Title *</div>
                 <input className="tag-input" placeholder="Auto-fetched if blank" value={title} onChange={e => setTitle(e.target.value)} />
               </div>
             </div>
-            
+
             <div style={{ width: 100 }}>
               <div className="detail-field-label">Preview</div>
               <div style={{ width: 100, height: 68, background: 'var(--bg3)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border)', overflow: 'hidden' }}>
-                {fetchedImage ? <img src={fetchedImage} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : <span style={{fontSize: 28}}>🔖</span>}
+                {fetchedImage ? <img src={fetchedImage} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: 28 }}>🔖</span>}
               </div>
             </div>
           </div>

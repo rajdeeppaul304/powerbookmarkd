@@ -9,6 +9,7 @@ export const useStore = create((set, get) => ({
     folders: [],
     isLoading: true,
     error: null,
+    contextMenu: null,
 
     jobs: [],
 
@@ -449,6 +450,6 @@ export const useStore = create((set, get) => ({
             alert("Action failed: " + err.message);
         }
     },
+setContextMenu: (menuData) => set({ contextMenu: menuData }),
 
-    
 }));

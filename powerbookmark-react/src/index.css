@@ -731,7 +731,7 @@
     .bookmarks-list { display: flex; flex-direction: column; gap: 6px; }
     .bookmark-row {
       display: flex;
-      align-items: center;
+      align-items: stretch;  
       gap: 12px;
       background: var(--bg2);
       border: 1px solid var(--border);
