@@ -54,6 +54,8 @@
       background: var(--bg2);
       border-bottom: 1px solid var(--border);
       z-index: 10;
+      height: 60px;
+      flex-shrink: 0;
     }
     .logo {
       display: flex;
@@ -141,6 +143,8 @@
       position: relative;
       display: flex;
       flex-direction: column;
+      width: 280px;
+      flex-shrink: 0;
     }
 
     /* ── Sidebar View Toggles ── */

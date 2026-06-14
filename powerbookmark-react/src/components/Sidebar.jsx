@@ -157,7 +157,7 @@ export default function Sidebar() {
 
       {/* TOOLS SECTION (Always visible at the bottom) */}
       <div className="sidebar-divider"></div>
-      <div className="sidebar-section">
+      {/* <div className="sidebar-section">
         <div className="sidebar-section-header">
           <span className="sidebar-label">Tools</span>
         </div>
@@ -177,7 +177,7 @@ export default function Sidebar() {
             <span className="item-name">Settings</span>
           </div>
         </div>
-      </div>
+      </div> */}
 
     </aside>
   );

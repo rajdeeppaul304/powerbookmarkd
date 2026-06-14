@@ -135,5 +135,8 @@ bulkDeleteItems: (bookmarkIds, folderIds) =>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bookmark_ids: bookmarkIds, folder_ids: folderIds }),
     }).then(handleResponse),
-
+createVault: (name) => 
+    fetch(`${API_URL}/vaults?name=${encodeURIComponent(name)}`, { method: "POST" }).then(handleResponse),
+  deleteVault: (name) => 
+    fetch(`${API_URL}/vaults/${encodeURIComponent(name)}`, { method: "DELETE" }).then(handleResponse),
 };

@@ -1,14 +1,43 @@
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useStore } from '../store';
 
 export default function Topbar() {
   const { bookmarks, viewMode, setViewMode, setSearchQuery } = useStore();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const isActive = (path) => location.pathname === path;
 
   return (
     <header className="topbar">
-      <div className="logo">
+      <div 
+        className="logo" 
+        style={{ cursor: 'pointer', marginRight: '16px' }} 
+        onClick={() => navigate('/')}
+      >
         <span className="logo-icon">🔖</span>
         PowerBookmark
       </div>
+
+      {/* NEW APP NAVIGATION */}
+      <div style={{ display: 'flex', gap: '8px', marginRight: 'auto' }}>
+        <button 
+          className={`btn ${isActive('/') ? 'btn-primary' : 'btn-secondary'}`} 
+          style={{ padding: '6px 12px' }} 
+          onClick={() => navigate('/')}
+        >Dashboard</button>
+        <button 
+          className={`btn ${isActive('/importer') ? 'btn-primary' : 'btn-secondary'}`} 
+          style={{ padding: '6px 12px' }} 
+          onClick={() => navigate('/importer')}
+        >Importer</button>
+        <button 
+          className={`btn ${isActive('/settings') ? 'btn-primary' : 'btn-secondary'}`} 
+          style={{ padding: '6px 12px' }} 
+          onClick={() => navigate('/settings')}
+        >Settings</button>
+      </div>
+
       <div className="search-wrap">
         <span className="search-icon">🔍</span>
         <input 
@@ -17,6 +46,7 @@ export default function Topbar() {
           onChange={(e) => setSearchQuery(e.target.value)}
         />
       </div>
+
       <div className="topbar-right">
         <div className="stat-pill"><span>{bookmarks.length}</span> bookmarks</div>
         <div className="view-toggle">

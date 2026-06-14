@@ -133,6 +133,21 @@ def init_db():
     if "favicon_path" not in existing_cols:
         c.execute("ALTER TABLE bookmarks ADD COLUMN favicon_path TEXT")
 
+
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS vaults (
+            name TEXT PRIMARY KEY
+        )
+    """)
+    
+    # 2. Always ensure 'default' exists
+    c.execute("INSERT OR IGNORE INTO vaults (name) VALUES ('default')")
+    
+    # 3. Live Migration: Find any existing vaults in bookmarks/folders and formally save them!
+    c.execute("INSERT OR IGNORE INTO vaults (name) SELECT DISTINCT vault FROM bookmarks")
+    c.execute("INSERT OR IGNORE INTO vaults (name) SELECT DISTINCT vault FROM folders")
+
     conn.commit()
     conn.close()
 
@@ -1353,12 +1368,6 @@ def list_vault(vault_name: str, limit: int = 100, offset: int = 0):
     conn.close()
     return {"vault": vault_name, "bookmarks": results, "total": total}
 
-@app.get("/vaults")
-def list_vaults():
-    conn = get_db()
-    rows = conn.execute("SELECT vault, COUNT(*) as count FROM bookmarks GROUP BY vault ORDER BY vault").fetchall()
-    conn.close()
-    return {"vaults": [{"name": r["vault"], "count": r["count"]} for r in rows]}
 
 @app.get("/recent")
 def recent(limit: int = 20):
@@ -1367,3 +1376,51 @@ def recent(limit: int = 20):
     results = [enrich_bookmark(conn, r) for r in rows]
     conn.close()
     return {"bookmarks": results}
+
+
+@app.get("/vaults")
+def list_vaults():
+    conn = get_db()
+    # Join our new vaults table with the bookmarks table to get the exact counts!
+    rows = conn.execute("""
+        SELECT v.name as vault, COUNT(b.id) as count 
+        FROM vaults v
+        LEFT JOIN bookmarks b ON v.name = b.vault
+        GROUP BY v.name
+        ORDER BY v.name
+    """).fetchall()
+    conn.close()
+    return {"vaults": [{"name": r["vault"], "count": r["count"]} for r in rows]}
+
+@app.post("/vaults")
+def create_vault(name: str = Query(...)):
+    conn = get_db()
+    # Now we actually save the empty vault to the database!
+    conn.execute("INSERT OR IGNORE INTO vaults (name) VALUES (?)", (name.strip(),))
+    conn.commit()
+    conn.close()
+    return {"status": "created", "vault": name.strip()}
+
+@app.post("/vaults/rename")
+def rename_vault(old_name: str = Query(...), new_name: str = Query(...)):
+    conn = get_db()
+    # Update the vault record AND move all items inside it
+    conn.execute("UPDATE vaults SET name=? WHERE name=?", (new_name, old_name))
+    conn.execute("UPDATE bookmarks SET vault=? WHERE vault=?", (new_name, old_name))
+    conn.execute("UPDATE folders SET vault=? WHERE vault=?", (new_name, old_name))
+    conn.commit()
+    conn.close()
+    return {"status": "renamed", "from": old_name, "to": new_name}
+
+@app.delete("/vaults/{vault_name}")
+def delete_vault(vault_name: str):
+    if vault_name == "default":
+        raise HTTPException(400, "Cannot delete default vault")
+    conn = get_db()
+    # Wipe the vault AND all items inside it
+    conn.execute("DELETE FROM vaults WHERE name=?", (vault_name,))
+    conn.execute("DELETE FROM bookmarks WHERE vault=?", (vault_name,))
+    conn.execute("DELETE FROM folders WHERE vault=?", (vault_name,))
+    conn.commit()
+    conn.close()
+    return {"status": "deleted"}

@@ -40,6 +40,9 @@ export const useStore = create((set, get) => ({
     targetFetchIds: [],
     setTargetFetchIds: (ids) => set({ targetFetchIds: ids }),
 
+    defaultVault: localStorage.getItem('pb_default_vault') || 'default',
+    viewMode: localStorage.getItem('pb_view_mode') || 'grid',
+
     // Data Injection (Optimistic Updates)
     addFolder: (folder) => set(state => ({ folders: [...state.folders, folder] })),
     addBookmark: (bookmark) => set(state => ({ bookmarks: [bookmark, ...state.bookmarks] })),
@@ -307,6 +310,15 @@ export const useStore = create((set, get) => ({
         } catch (err) {
             alert("Failed to delete items: " + err.message);
         }
+    },
+
+    setDefaultVault: (vaultName) => {
+        localStorage.setItem('pb_default_vault', vaultName);
+        set({ defaultVault: vaultName });
+    },
+    setViewMode: (mode) => {
+        localStorage.setItem('pb_view_mode', mode);
+        set({ viewMode: mode });
     },
 
 
