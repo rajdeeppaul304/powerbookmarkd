@@ -17,6 +17,9 @@ let folderCollapsed = {};
 // ordered items cache: folder_id (or "__root__") → ordered_items array
 // Used only in list view to render the interleaved sorted list.
 let orderedItemsCache = {};
+let activePrimaryView = localStorage.getItem("pb_sidebar_primary") || "folders"; // 'browse', 'vaults', 'folders'
+let activeTagsView = localStorage.getItem("pb_sidebar_tags") === "true"; // true or false
+
 
 // selection state — bookmarks AND subfolders
 let selectedIds = new Set();
@@ -265,6 +268,7 @@ function applySectionCollapse(key) {
 
 // ── Static control bindings ───────────────────────────────────────────────────
 function bindStaticControls() {
+  bindSidebarToggles();
   document.querySelectorAll(".sort-btn").forEach(btn => {
     if (!btn.dataset.sort) return; // skip + Folder / + Bookmark buttons
     btn.addEventListener("click", () => {
@@ -301,6 +305,75 @@ function bindStaticControls() {
   });
   render();
 });
+
+function bindSidebarToggles() {
+  const toggles = document.querySelectorAll('.sb-toggle');
+  
+  // Initial render based on loaded state
+  applySidebarView();
+
+  toggles.forEach(toggle => {
+    toggle.addEventListener('click', () => {
+      const view = toggle.dataset.sbView;
+
+      if (view === "tags") {
+        // Tags is an independent toggle
+        activeTagsView = !activeTagsView;
+        localStorage.setItem("pb_sidebar_tags", activeTagsView);
+      } else {
+        // Browse, Vaults, and Folders are mutually exclusive primary views
+        activePrimaryView = view;
+        localStorage.setItem("pb_sidebar_primary", activePrimaryView);
+        
+        // If switching to folders, ensure we are in a folder or all view
+        if (view === "folders" && currentFilter.type === "vault") {
+            currentFilter = { type: "all", value: null };
+            document.querySelectorAll(".sidebar-item, .folder-tree-row").forEach(i => i.classList.remove("active"));
+            document.querySelector('.sidebar-item[data-filter="all"]')?.classList.add("active");
+            render();
+        }
+      }
+      applySidebarView();
+    });
+  });
+}
+
+function applySidebarView() {
+  // 1. Update button styling
+  document.querySelectorAll('.sb-toggle').forEach(toggle => {
+    const view = toggle.dataset.sbView;
+    if (view === "tags") {
+      toggle.classList.toggle("active", activeTagsView);
+    } else {
+      toggle.classList.toggle("active", view === activePrimaryView);
+    }
+  });
+
+  // 2. Show/Hide actual sidebar sections
+  // We use .style.display to fully remove them from the flow when hidden
+  const sections = {
+    browse: document.getElementById("sectionBrowse"),
+    vaults: document.getElementById("sectionVaults"),
+    folders: document.getElementById("sectionFolders"),
+    tags: document.getElementById("sectionTags")
+  };
+
+  if (sections.browse)  sections.browse.style.display  = (activePrimaryView === "browse") ? "flex" : "none";
+  if (sections.vaults)  sections.vaults.style.display  = (activePrimaryView === "vaults") ? "flex" : "none";
+  if (sections.folders) sections.folders.style.display = (activePrimaryView === "folders") ? "flex" : "none";
+  if (sections.tags)    sections.tags.style.display    = activeTagsView ? "flex" : "none";
+  
+  // Hide the divider lines if the sections they follow are hidden
+  // This is a quick cleanup so we don't get stacked empty lines
+  const dividers = document.querySelectorAll(".sidebar-divider");
+  if (dividers.length >= 3) {
+      dividers[0].style.display = (activePrimaryView === "browse") ? "block" : "none";
+      dividers[1].style.display = (activePrimaryView === "vaults") ? "block" : "none";
+      dividers[2].style.display = (activePrimaryView === "folders" && activeTagsView) ? "block" : "none";
+  }
+}
+
+
 document.getElementById("viewList").addEventListener("click", async () => {
   currentView = "list";
   document.getElementById("viewList").classList.add("active");
