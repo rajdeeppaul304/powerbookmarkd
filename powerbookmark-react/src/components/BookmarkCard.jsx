@@ -62,6 +62,14 @@ const { selectedBookmarks, toggleBookmarkSelection, setDetailBookmark, setArchiv
         {bm.archived && <span className="badge" style={{background: 'rgba(59,130,246,0.1)', color: 'var(--blue)'}}>📦</span>}
       </div>
 
+      <button 
+        className="card-action-btn" 
+        onClick={(e) => { e.stopPropagation(); setDetailBookmark(bm, true); }} // true = Start Editing!
+        style={{ position: 'absolute', top: '8px', right: bm.archived ? '60px' : '8px', padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: 'none', background: 'var(--bg3)', color: 'var(--text)', cursor: 'pointer', opacity: 0.8 }}
+      >
+        ✏️
+      </button>
+
       {bm.archived && (
         <button 
           className="card-action-btn" 

@@ -3,7 +3,7 @@ import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { useStore } from '../store';
 
 export default function FolderCard({ folder }) {
-  const { selectedFolders, toggleFolderSelection, setFilter } = useStore();
+  const { selectedFolders, toggleFolderSelection, setFilter, renameFolder } = useStore();
   const isSelected = selectedFolders.has(folder.id);
 
   const { attributes, listeners, setNodeRef: setDraggableRef, isDragging } = useDraggable({
@@ -59,6 +59,14 @@ export default function FolderCard({ folder }) {
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text3)' }}>Folder</div>
       </div>
+
+      <button 
+        className="card-action-btn" 
+        onClick={(e) => { e.stopPropagation(); renameFolder(folder.id, folder.name); }}
+        style={{ position: 'absolute', top: '8px', right: '8px', padding: '4px 8px', fontSize: '11px', borderRadius: '4px', border: 'none', background: 'var(--bg3)', color: 'var(--text)', cursor: 'pointer', opacity: 0.8 }}
+      >
+        ✏️
+      </button>
     </div>
   );
 }

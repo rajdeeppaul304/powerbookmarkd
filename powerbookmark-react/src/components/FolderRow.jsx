@@ -5,7 +5,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useStore } from '../store';
 
 export default function FolderRow({ folder }) {
-  const { selectedFolders, toggleFolderSelection, setFilter } = useStore();
+  const { selectedFolders, toggleFolderSelection, setFilter, renameFolder} = useStore();
   const isSelected = selectedFolders.has(folder.id);
 
   // 1. REORDER ENGINE (Outer Wrapper & Grip)
@@ -76,6 +76,9 @@ const style = {
 
         <div className="row-badges">
           <span className="badge badge-vault">{folder.vault || "default"}</span>
+        </div>
+        <div className="row-actions">
+          <button className="action-btn" onClick={(e) => { e.stopPropagation(); renameFolder(folder.id, folder.name); }}>✏️ Rename</button>
         </div>
       </div>
     </div>

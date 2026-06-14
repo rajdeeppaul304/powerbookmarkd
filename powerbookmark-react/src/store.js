@@ -6,7 +6,6 @@ export const useStore = create((set, get) => ({
     // --- State ---
     bookmarks: [],
     vaults: [],
-    activeVault: 'default',
     folders: [],
     isLoading: true,
     error: null,
@@ -22,7 +21,9 @@ export const useStore = create((set, get) => ({
     selectedFolders: new Set(),
     // Modal State
     detailBookmark: null,
-    setDetailBookmark: (bm) => set({ detailBookmark: bm }),
+    isEditingDetails: false,
+    setDetailBookmark: (bm, edit = false) => set({ detailBookmark: bm, isEditingDetails: edit }),
+    setEditingDetails: (isEditing) => set({ isEditingDetails: isEditing }), // <--- ADD THIS
     // ADD THESE TWO LINES:
     archiveViewBookmark: null,
     setArchiveViewBookmark: (bm) => set({ archiveViewBookmark: bm }),
@@ -41,6 +42,7 @@ export const useStore = create((set, get) => ({
     setTargetFetchIds: (ids) => set({ targetFetchIds: ids }),
 
     defaultVault: localStorage.getItem('pb_default_vault') || 'default',
+    activeVault: localStorage.getItem('pb_default_vault') || 'default', // <--- Update this line
     viewMode: localStorage.getItem('pb_view_mode') || 'grid',
 
     // Data Injection (Optimistic Updates)
@@ -69,12 +71,17 @@ export const useStore = create((set, get) => ({
                 const folderTree = await api.getFolderTree(v.name);
                 allFolders.push(...folderTree);
             }
+            const storedDefault = get().defaultVault;
+            const vaultToSet = vaultsList.some(v => v.name === storedDefault)
+                ? storedDefault
+                : (vaultsList[0]?.name || "default");
 
             set({
                 vaults: vaultsList,
                 bookmarks: recentData.bookmarks || [],
                 folders: allFolders,
-                activeVault: vaultsList[0]?.name || "default", // <--- ADD THIS
+                activeVault: vaultToSet, // <--- ADD THIS
+                currentFilter: { type: 'vault', value: vaultToSet },
                 isLoading: false
             });
         } catch (err) {
@@ -82,24 +89,90 @@ export const useStore = create((set, get) => ({
         }
     },
 
+
+
+    // The Silent Heartbeat Sync
+    silentSync: async () => {
+        try {
+            // 1. Fetch fresh data quietly in the background
+            const [vaultsData, recentData] = await Promise.all([
+                api.getVaults(),
+                api.getRecentBookmarks()
+            ]);
+
+            const vaultsList = vaultsData.vaults || [];
+            const allFolders = [];
+            for (const v of vaultsList) {
+                const folderTree = await api.getFolderTree(v.name);
+                allFolders.push(...folderTree);
+            }
+
+            // 2. Perform the Surgical Merge
+            set(state => {
+                // Merge Bookmarks
+                const currentBms = new Map(state.bookmarks.map(b => [b.id, b]));
+                const incomingBms = recentData.bookmarks || [];
+
+                const mergedBookmarks = incomingBms.map(newBm => {
+                    const oldBm = currentBms.get(newBm.id);
+                    if (oldBm) {
+                        newBm.position = oldBm.position; // <--- PRESERVE THE LOCAL POSITION
+                        if (JSON.stringify(oldBm) === JSON.stringify(newBm)) return oldBm;
+                    }
+                    return newBm;
+                });
+
+                // Merge Folders
+                const currentFols = new Map(state.folders.map(f => [f.id, f]));
+                const mergedFolders = allFolders.map(newFol => {
+                    const oldFol = currentFols.get(newFol.id);
+                    if (oldFol) {
+                        newFol.position = oldFol.position; // <--- PRESERVE THE LOCAL POSITION
+                        if (JSON.stringify(oldFol) === JSON.stringify(newFol)) return oldFol;
+                    }
+                    return newFol;
+                });
+
+                // 3. Safety Check: If an item was deleted on another tab, 
+                // silently remove it from our active selections!
+                const activeBmIds = new Set(mergedBookmarks.map(b => b.id));
+                const activeFolIds = new Set(mergedFolders.map(f => f.id));
+
+                const safeSelectedBms = new Set([...state.selectedBookmarks].filter(id => activeBmIds.has(id)));
+                const safeSelectedFols = new Set([...state.selectedFolders].filter(id => activeFolIds.has(id)));
+
+                return {
+                    vaults: vaultsList,
+                    bookmarks: mergedBookmarks,
+                    folders: mergedFolders,
+                    selectedBookmarks: safeSelectedBms,
+                    selectedFolders: safeSelectedFols
+                };
+            });
+        } catch (err) {
+            // If the backend goes down briefly, just ignore it. No need to throw red errors.
+            console.warn("Background sync paused: Server unreachable");
+        }
+    },
+
     // Filter & View Actions
     setFilter: (type, value = null) => set(state => {
         let newVault = state.activeVault;
-        
+
         // If we click a specific vault or folder, update our active memory
         if (type === 'vault') newVault = value;
         else if (type === 'folder') {
             const f = state.folders.find(fol => fol.id === value);
             if (f) newVault = f.vault;
         }
-        
+
         // If we click 'root', newVault safely stays exactly what it was!
-        return { 
-            currentFilter: { type, value }, 
-            searchQuery: '', 
-            selectedBookmarks: new Set(), 
+        return {
+            currentFilter: { type, value },
+            searchQuery: '',
+            selectedBookmarks: new Set(),
             selectedFolders: new Set(),
-            activeVault: newVault 
+            activeVault: newVault
         };
     }),
     setSearchQuery: (query) => set({ searchQuery: query }),
@@ -322,4 +395,37 @@ export const useStore = create((set, get) => ({
     },
 
 
+    renameFolder: async (id, oldName) => {
+        const newName = window.prompt("Rename folder to:", oldName);
+        if (!newName || newName.trim() === "" || newName === oldName) return;
+
+        // Optimistic UI update
+        set(state => ({
+            folders: state.folders.map(f => f.id === id ? { ...f, name: newName.trim() } : f)
+        }));
+
+        try {
+            await api.renameFolder(id, newName.trim());
+        } catch (err) {
+            alert("Failed to rename folder: " + err.message);
+            get().loadInitialData(); // Revert on failure
+        }
+    },
+
+    saveBookmarkEdits: async (id, data) => {
+        // 1. Optimistic UI Update (Instant!)
+        set(state => ({
+            bookmarks: state.bookmarks.map(b => b.id === id ? { ...b, ...data } : b),
+            detailBookmark: { ...state.detailBookmark, ...data },
+            isEditingDetails: false // Close edit mode
+        }));
+
+        // 2. Background Sync
+        try {
+            await api.updateBookmark(id, data);
+        } catch (err) {
+            alert("Failed to save edits: " + err.message);
+            get().loadInitialData(); // Revert on failure
+        }
+    },
 }));

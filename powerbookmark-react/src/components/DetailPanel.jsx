@@ -1,25 +1,83 @@
-// src/components/DetailPanel.jsx
+import { useState, useEffect } from 'react';
 import { useStore } from '../store';
-import { hostOf, formatDate } from '../utils';
-import { API_URL } from '../api';
+import { API_URL, api } from '../api';
 
 export default function DetailPanel() {
-  const { detailBookmark: bm, setDetailBookmark, setArchiveViewBookmark } = useStore();
+  const { 
+    detailBookmark: bm, setDetailBookmark, 
+    isEditingDetails, setEditingDetails, saveBookmarkEdits,
+    setArchiveViewBookmark, setTargetFetchIds, setBulkFetchOpen 
+  } = useStore();
 
-  if (!bm) return null; // If no bookmark is selected, render absolutely nothing!
+  // Local state for our inline inputs
+  const [editTitle, setEditTitle] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+  const [editTags, setEditTags] = useState("");
 
-  const closePanel = () => setDetailBookmark(null);
+  // When we enter edit mode, pre-fill the inputs with the bookmark's current data
+  useEffect(() => {
+    if (bm && isEditingDetails) {
+      setEditTitle(bm.title || "");
+      setEditUrl(bm.url || "");
+      setEditNotes(bm.notes || "");
+      setEditTags((bm.tags || []).join(", "));
+    }
+  }, [bm, isEditingDetails]);
+
+  if (!bm) return null;
+
+  const closePanel = () => {
+    setDetailBookmark(null);
+    setEditingDetails(false); // Reset edit state when closing
+  };
+
+  const handleSave = () => {
+    // Convert comma string back to array
+    const parsedTags = editTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+    
+    saveBookmarkEdits(bm.id, {
+      title: editTitle,
+      url: editUrl,
+      notes: editNotes,
+      tags: parsedTags
+    });
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm("Are you sure you want to delete this bookmark?")) return;
+    try {
+      await api.bulkDeleteItems([bm.id], []);
+      useStore.setState(state => ({
+        bookmarks: state.bookmarks.filter(b => b.id !== bm.id),
+        detailBookmark: null,
+        isEditingDetails: false
+      }));
+    } catch (err) {
+      alert("Failed to delete: " + err.message);
+    }
+  };
 
   return (
     <div className="detail-overlay open">
-      {/* Backdrop clicks close the panel */}
       <div className="detail-backdrop" onClick={closePanel}></div>
       
       <div className="detail-panel">
-        <div className="detail-header">
+        <div className="detail-header" style={{ alignItems: 'flex-start' }}>
           <button className="detail-close" onClick={closePanel}>✕</button>
           <div style={{ flex: 1 }}>
-            <div className="detail-title">{bm.title || bm.url}</div>
+            {/* INLINE EDIT: TITLE */}
+            {isEditingDetails ? (
+              <input 
+                className="tag-input" 
+                style={{ fontSize: '18px', fontWeight: 600, padding: '4px 8px', width: '100%' }}
+                value={editTitle} 
+                onChange={e => setEditTitle(e.target.value)} 
+                placeholder="Bookmark Title"
+              />
+            ) : (
+              <div className="detail-title">{bm.title || bm.url}</div>
+            )}
           </div>
         </div>
 
@@ -32,30 +90,48 @@ export default function DetailPanel() {
             )}
           </div>
           
-          <div className="detail-title">{bm.title || "Untitled"}</div>
-          
-          <div className="detail-url" style={{ display: 'flex', alignItems: 'center' }} onClick={() => window.open(bm.url, '_blank')}>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', color: 'var(--blue)' }}>
-              {bm.url}
-            </span>
-          </div>
+          {/* INLINE EDIT: URL */}
+          {isEditingDetails ? (
+             <div className="detail-field" style={{ marginTop: '14px' }}>
+               <div className="detail-field-label">URL</div>
+               <input 
+                 className="tag-input" 
+                 value={editUrl} 
+                 onChange={e => setEditUrl(e.target.value)} 
+               />
+             </div>
+          ) : (
+            <div className="detail-url" style={{ display: 'flex', alignItems: 'center', marginTop: '14px' }} onClick={() => window.open(bm.url, '_blank')}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', color: 'var(--blue)' }}>
+                {bm.url}
+              </span>
+            </div>
+          )}
 
           <div className="detail-field" style={{ marginTop: '14px' }}>
             <div className="detail-field-label">Vault</div>
-            <div className="detail-field-value">📁 {bm.vault || "default"}</div>
+            <div className="detail-field-value" style={{ opacity: 0.7 }}>📁 {bm.vault || "default"} <span style={{fontSize: 10}}>(Move to change)</span></div>
           </div>
 
+          {/* INLINE EDIT: TAGS */}
           <div className="detail-field">
-            <div className="detail-field-label">
-              Tags <button style={{marginLeft: 6, fontSize: 10, padding: '1px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg3)', color: 'var(--text2)', cursor: 'pointer'}}>Edit</button>
-            </div>
-            <div className="detail-tags">
-              {(bm.tags || []).length > 0 ? (
-                bm.tags.map(t => <span key={t} className="badge badge-tag">{t}</span>)
-              ) : (
-                <span style={{ color: 'var(--text3)', fontSize: '12px' }}>No tags</span>
-              )}
-            </div>
+            <div className="detail-field-label">Tags</div>
+            {isEditingDetails ? (
+              <input 
+                className="tag-input" 
+                value={editTags} 
+                onChange={e => setEditTags(e.target.value)} 
+                placeholder="tech, reading, code..."
+              />
+            ) : (
+              <div className="detail-tags">
+                {(bm.tags || []).length > 0 ? (
+                  bm.tags.map(t => <span key={t} className="badge badge-tag">{t}</span>)
+                ) : (
+                  <span style={{ color: 'var(--text3)', fontSize: '12px' }}>No tags</span>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="detail-field">
@@ -65,23 +141,38 @@ export default function DetailPanel() {
             </div>
           </div>
 
-          {bm.notes && (
-            <div className="detail-field">
-              <div className="detail-field-label">Notes</div>
-              <div className="detail-notes">{bm.notes}</div>
-            </div>
-          )}
+          {/* INLINE EDIT: NOTES */}
+          <div className="detail-field">
+            <div className="detail-field-label">Notes</div>
+            {isEditingDetails ? (
+              <textarea 
+                className="tag-input" 
+                style={{ minHeight: '80px', resize: 'vertical' }}
+                value={editNotes} 
+                onChange={e => setEditNotes(e.target.value)} 
+                placeholder="Add some notes..."
+              />
+            ) : (
+              bm.notes ? <div className="detail-notes">{bm.notes}</div> : <span style={{ color: 'var(--text3)', fontSize: '12px' }}>—</span>
+            )}
+          </div>
         </div>
 
+        {/* FOOTER ACTIONS SWAP BASED ON EDIT MODE */}
         <div className="detail-footer">
-          <button className="btn btn-primary" onClick={() => window.open(bm.url, '_blank')}>↗ Open</button>
-          {bm.archived && (
-            <button className="btn btn-secondary" onClick={() => setArchiveViewBookmark(bm)}>
-              📄 Archive
-            </button>
+          {isEditingDetails ? (
+            <>
+              <button className="btn btn-secondary" onClick={() => setEditingDetails(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSave}>💾 Save Changes</button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-primary" onClick={() => setEditingDetails(true)}>✏️ Edit</button>
+              {bm.archived && <button className="btn btn-secondary" onClick={() => setArchiveViewBookmark(bm)}>📄 Archive</button>}
+              <button className="btn btn-secondary" style={{ flex: '0 1 auto' }} onClick={() => { setTargetFetchIds([bm.id]); setBulkFetchOpen(true); }}>⚡</button>
+              <button className="btn btn-danger-outline" style={{ flex: '0 1 auto' }} onClick={handleDelete}>🗑</button>
+            </>
           )}
-          <button className="btn btn-secondary" style={{ flex: '0 1 auto' }} title="Fetch screenshot & archive">⚡ Fetch</button>
-          <button className="btn btn-danger-outline" style={{ flex: '0 1 auto' }}>🗑</button>
         </div>
       </div>
     </div>

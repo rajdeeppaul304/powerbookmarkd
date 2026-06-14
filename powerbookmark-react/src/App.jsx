@@ -29,7 +29,19 @@ export default function App() {
   const showSidebar = location.pathname === '/';
 
   useEffect(() => {
+    // 1. Initial boot-up (shows the loading screen)
     loadInitialData();
+
+    // 2. Start the silent walkie-talkie heartbeat
+    const syncInterval = setInterval(() => {
+      // ONLY sync if the user is actually looking at the tab!
+      if (!document.hidden) {
+        useStore.getState().silentSync();
+      }
+    }, 3000);
+
+    // 3. Clean up the timer if the app ever unmounts
+    return () => clearInterval(syncInterval);
   }, [loadInitialData]);
 
   // --- DND HANDLERS ---

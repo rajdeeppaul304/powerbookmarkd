@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useStore } from '../store';
 import { api } from '../api';
 
+
+
+
 export default function Settings() {
   const { vaults, loadInitialData, defaultVault, setDefaultVault, viewMode, setViewMode } = useStore();
   const [newVaultName, setNewVaultName] = useState("");
@@ -11,6 +14,25 @@ export default function Settings() {
     await api.createVault(newVaultName.trim());
     setNewVaultName("");
     loadInitialData();
+  };
+
+
+  const handleRenameVault = async (oldName) => {
+    const newName = window.prompt(`Rename vault "${oldName}" to:`, oldName);
+    if (!newName || newName.trim() === "" || newName === oldName) return;
+    
+    try {
+      await api.renameVault(oldName, newName.trim());
+      
+      // If we just renamed our Default Vault, we need to update our localStorage!
+      if (oldName === defaultVault) {
+        setDefaultVault(newName.trim());
+      }
+      
+      loadInitialData(); // Refresh everything
+    } catch (err) {
+      alert("Failed to rename vault: " + err.message);
+    }
   };
 
   const handleDeleteVault = async (name) => {
@@ -96,6 +118,14 @@ export default function Settings() {
               </div>
               
               {v.name !== 'default' && (
+                <div>
+                    <button 
+                    className="btn btn-secondary" 
+                    style={{ padding: '6px 12px', fontSize: '12px', marginRight: '8px' }} 
+                    onClick={() => handleRenameVault(v.name)}
+                  >
+                    Rename
+                  </button>
                 <button 
                   className="btn btn-danger-outline" 
                   style={{ padding: '6px 12px', fontSize: '12px' }} 
@@ -103,6 +133,7 @@ export default function Settings() {
                 >
                   Delete
                 </button>
+                </div>
               )}
             </div>
           ))}

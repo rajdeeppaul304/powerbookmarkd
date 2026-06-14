@@ -67,6 +67,12 @@ export const api = {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(data),
         }).then(handleResponse),
+    renameFolder: (id, name) => 
+        fetch(`${API_URL}/folders/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name })
+        }).then(handleResponse),
 
     fetchMeta: (url, doArchive) =>
         fetch(`${API_URL}/fetch-meta`, {
@@ -111,32 +117,41 @@ export const api = {
             body: JSON.stringify({ folder_id, items }),
         }).then(handleResponse),
 
-    getOrder: (folder_id) => 
-    fetch(`${API_URL}/${folder_id ? `folder/${folder_id}/order` : 'root/order'}`)
-    .then(handleResponse),
+    getOrder: (folder_id) =>
+        fetch(`${API_URL}/${folder_id ? `folder/${folder_id}/order` : 'root/order'}`)
+            .then(handleResponse),
 
 
-    bulkCopyBookmarks: (ids, folder_id, vault) => 
-    fetch(`${API_URL}/bookmarks/bulk-copy`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids, folder_id, vault }),
-    }).then(handleResponse),
+    bulkCopyBookmarks: (ids, folder_id, vault) =>
+        fetch(`${API_URL}/bookmarks/bulk-copy`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids, folder_id, vault }),
+        }).then(handleResponse),
 
-  bulkTagBookmarks: (ids, add, remove) => 
-    fetch(`${API_URL}/bookmarks/bulk-tag`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids, add, remove }),
-    }).then(handleResponse),
-bulkDeleteItems: (bookmarkIds, folderIds) => 
-    fetch(`${API_URL}/items/bulk-delete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookmark_ids: bookmarkIds, folder_ids: folderIds }),
-    }).then(handleResponse),
-createVault: (name) => 
-    fetch(`${API_URL}/vaults?name=${encodeURIComponent(name)}`, { method: "POST" }).then(handleResponse),
-  deleteVault: (name) => 
-    fetch(`${API_URL}/vaults/${encodeURIComponent(name)}`, { method: "DELETE" }).then(handleResponse),
+    bulkTagBookmarks: (ids, add, remove) =>
+        fetch(`${API_URL}/bookmarks/bulk-tag`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids, add, remove }),
+        }).then(handleResponse),
+    bulkDeleteItems: (bookmarkIds, folderIds) =>
+        fetch(`${API_URL}/items/bulk-delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bookmark_ids: bookmarkIds, folder_ids: folderIds }),
+        }).then(handleResponse),
+    createVault: (name) =>
+        fetch(`${API_URL}/vaults?name=${encodeURIComponent(name)}`, { method: "POST" }).then(handleResponse),
+    deleteVault: (name) =>
+        fetch(`${API_URL}/vaults/${encodeURIComponent(name)}`, { method: "DELETE" }).then(handleResponse),
+    // ADD THIS:
+    renameVault: (oldName, newName) =>
+        fetch(`${API_URL}/vaults/rename?old_name=${encodeURIComponent(oldName)}&new_name=${encodeURIComponent(newName)}`, { method: "POST" }).then(handleResponse),
+    updateBookmark: (id, data) => 
+        fetch(`${API_URL}/bookmark/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data)
+        }).then(handleResponse),
 };

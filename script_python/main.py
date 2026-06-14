@@ -339,7 +339,13 @@ class BulkFolderMoveRequest(BaseModel):
 class BulkDeleteRequest(BaseModel):
     bookmark_ids: list[str]
     folder_ids: list[str]
-    
+
+
+class BookmarkUpdate(BaseModel):
+    title: str
+    url: str
+    notes: str
+    tags: list[str] = [] # <--- Added tags!
     # ── Helpers ───────────────────────────────────────────────────────────────────
 def row_to_dict(row) -> dict:
     return dict(row)
@@ -710,6 +716,35 @@ def patch_notes(bid: str, req: BookmarkNotesPatch):
     d = enrich_bookmark(conn, updated)
     conn.close()
     return d
+
+@app.patch("/bookmark/{bid}")
+def update_bookmark_details(bid: str, req: BookmarkUpdate):
+    conn = get_db()
+    row = conn.execute("SELECT id FROM bookmarks WHERE id=?", (bid,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, "Bookmark not found")
+        
+    # Update core details
+    conn.execute("""
+        UPDATE bookmarks 
+        SET title=?, url=?, notes=? 
+        WHERE id=?
+    """, (req.title.strip(), req.url.strip(), req.notes.strip(), bid))
+    
+    # Wipe old tags and insert new ones
+    conn.execute("DELETE FROM tags WHERE bookmark_id=?", (bid,))
+    for tag in req.tags:
+        clean_tag = tag.strip().lower()
+        if clean_tag:
+            conn.execute("INSERT OR IGNORE INTO tags (bookmark_id, tag) VALUES (?,?)", (bid, clean_tag))
+    
+    conn.commit()
+    updated = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
+    d = enrich_bookmark(conn, updated)
+    conn.close()
+    return d
+
 
 # ── Bulk operations ───────────────────────────────────────────────────────────
 

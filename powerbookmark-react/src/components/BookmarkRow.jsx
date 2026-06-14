@@ -79,7 +79,10 @@ const { selectedBookmarks, toggleBookmarkSelection, setDetailBookmark, setArchiv
           {bm.archived && <span className="badge" style={{background: 'rgba(59,130,246,0.1)', color: 'var(--blue)'}}>📦</span>}
         </div>
 
+        
+
         <div className="row-actions">
+            <button className="action-btn" onClick={(e) => { e.stopPropagation(); setDetailBookmark(bm, true); }}>✏️ Edit</button>
           {bm.archived && (
             <button className="action-btn" onClick={(e) => { e.stopPropagation(); setArchiveViewBookmark(bm); }}>
               📄 Archive
