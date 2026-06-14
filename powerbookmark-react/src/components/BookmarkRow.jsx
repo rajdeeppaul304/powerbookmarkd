@@ -7,7 +7,7 @@ import { hostOf } from '../utils';
 import { API_URL } from '../api';
 
 export default function BookmarkRow({ bm }) {
-const { selectedBookmarks, toggleBookmarkSelection, setDetailBookmark, setArchiveViewBookmark } = useStore();
+const { selectedBookmarks, toggleBookmarkSelection, setDetailBookmark, setArchiveViewBookmark , setFilter} = useStore();
   const isSelected = selectedBookmarks.has(bm.id);
 
   // 1. REORDER ENGINE (Attached only to the grip handle)
@@ -74,8 +74,25 @@ const { selectedBookmarks, toggleBookmarkSelection, setDetailBookmark, setArchiv
         </div>
 
         <div className="row-badges">
-          <span className="badge badge-vault">{bm.vault || "default"}</span>
-          {(bm.tags || []).slice(0, 2).map(t => <span key={t} className="badge badge-tag">{t}</span>)}
+          <span 
+              className="badge badge-vault" 
+              style={{ cursor: 'pointer' }}
+              onClick={(e) => { e.stopPropagation(); setFilter('vault', bm.vault || "default"); }}
+          >
+              {bm.vault || "default"}
+          </span>
+          
+          {(bm.tags || []).slice(0, 2).map(t => (
+              <span 
+                  key={t} 
+                  className="badge badge-tag" 
+                  style={{ cursor: 'pointer' }}
+                  onClick={(e) => { e.stopPropagation(); setFilter('tag', t); }}
+              >
+                  {t}
+              </span>
+          ))}
+          
           {bm.archived && <span className="badge" style={{background: 'rgba(59,130,246,0.1)', color: 'var(--blue)'}}>📦</span>}
         </div>
 

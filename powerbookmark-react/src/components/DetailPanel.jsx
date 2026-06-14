@@ -6,7 +6,8 @@ export default function DetailPanel() {
   const { 
     detailBookmark: bm, setDetailBookmark, 
     isEditingDetails, setEditingDetails, saveBookmarkEdits,
-    setArchiveViewBookmark, setTargetFetchIds, setBulkFetchOpen 
+    setArchiveViewBookmark, setTargetFetchIds, setBulkFetchOpen,
+    setFilter // Successfully imported!
   } = useStore();
 
   // Local state for our inline inputs
@@ -108,12 +109,19 @@ export default function DetailPanel() {
             </div>
           )}
 
+          {/* VAULT (Perfectly implemented by you) */}
           <div className="detail-field" style={{ marginTop: '14px' }}>
             <div className="detail-field-label">Vault</div>
-            <div className="detail-field-value" style={{ opacity: 0.7 }}>📁 {bm.vault || "default"} <span style={{fontSize: 10}}>(Move to change)</span></div>
+            <div 
+                className="detail-field-value" 
+                style={{ opacity: 0.7, cursor: 'pointer', display: 'inline-block' }}
+                onClick={() => { setFilter('vault', bm.vault || "default"); closePanel(); }}
+            >
+                📁 {bm.vault || "default"} <span style={{fontSize: 10}}>(Move to change)</span>
+            </div>
           </div>
 
-          {/* INLINE EDIT: TAGS */}
+          {/* INLINE EDIT: TAGS (This is the missing update) */}
           <div className="detail-field">
             <div className="detail-field-label">Tags</div>
             {isEditingDetails ? (
@@ -126,7 +134,16 @@ export default function DetailPanel() {
             ) : (
               <div className="detail-tags">
                 {(bm.tags || []).length > 0 ? (
-                  bm.tags.map(t => <span key={t} className="badge badge-tag">{t}</span>)
+                  bm.tags.map(t => (
+                    <span 
+                      key={t} 
+                      className="badge badge-tag" 
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => { setFilter('tag', t); closePanel(); }}
+                    >
+                      {t}
+                    </span>
+                  ))
                 ) : (
                   <span style={{ color: 'var(--text3)', fontSize: '12px' }}>No tags</span>
                 )}

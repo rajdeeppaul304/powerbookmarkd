@@ -38,7 +38,10 @@ function DroppableCrumb({ folderId, name, isLast }) {
 }
 
 export default function MainArea() {
-    const { bookmarks, folders, currentFilter, activeVault , sortMode, setSortMode, searchQuery, viewMode, selectedBookmarks, selectedFolders, setSelection, clearSelection } = useStore();
+    const { bookmarks, folders, currentFilter, activeVault, sortMode, setSortMode, searchQuery, viewMode, selectedBookmarks, selectedFolders, setSelection, clearSelection,
+        renameFolder, setDetailBookmark } = useStore();
+
+
     // Instantly fetch the correct DB order for this specific view!
     useEffect(() => {
         if (currentFilter.type === 'folder' || currentFilter.type === 'root' || currentFilter.type === 'vault') {
@@ -50,14 +53,42 @@ export default function MainArea() {
     }, [currentFilter.value, currentFilter.type]);
     // This block completely replaces your vanilla `getFiltered()` function!
     // useMemo ensures it only recalculates when bookmarks, filter, sort, or search changes.
+
+    // --- F2 KEYBOARD SHORTCUT ---
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            // Safety: Don't trigger if the user is typing in a search bar, input, or textarea
+            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
+
+            if (e.key === 'F2') {
+                e.preventDefault(); // Stop default browser F2 actions
+
+                if (selectedFolders.size === 1 && selectedBookmarks.size === 0) {
+                    // Rename Folder
+                    const folderId = Array.from(selectedFolders)[0];
+                    const folder = folders.find(f => f.id === folderId);
+                    if (folder) renameFolder(folder.id, folder.name);
+
+                } else if (selectedBookmarks.size === 1 && selectedFolders.size === 0) {
+                    // Edit Bookmark
+                    const bmId = Array.from(selectedBookmarks)[0];
+                    const bm = bookmarks.find(b => b.id === bmId);
+                    if (bm) setDetailBookmark(bm, true); // true = open in Edit Mode
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [selectedBookmarks, selectedFolders, folders, bookmarks, renameFolder, setDetailBookmark]);
     const filteredBookmarks = useMemo(() => {
-let items = [...bookmarks];
+        let items = [...bookmarks];
 
         // Root only shows items explicitly at the base level OF THE ACTIVE VAULT
         if (currentFilter.type === "root") items = items.filter(b => !b.folder_id && b.vault === activeVault);
-        
+
         // Vault only shows base level items inside that vault
-        if (currentFilter.type === "vault") items = items.filter(b => b.vault === currentFilter.value && !b.folder_id); 
+        if (currentFilter.type === "vault") items = items.filter(b => b.vault === currentFilter.value && !b.folder_id);
 
         // Filters
         if (currentFilter.type === "archived") items = items.filter(b => b.archived);
@@ -90,7 +121,7 @@ let items = [...bookmarks];
 
     const filteredFolders = useMemo(() => {
         // We only show folders if we are in "all", "vault", or a specific "folder"
-       if (['archived', 'screenshot', 'tag', 'all'].includes(currentFilter.type)) return []; // <--- "all" has no folders
+        if (['archived', 'screenshot', 'tag', 'all'].includes(currentFilter.type)) return []; // <--- "all" has no folders
 
         if (currentFilter.type === 'vault') {
             return folders.filter(f => f.vault === currentFilter.value && !f.parent_id); // Show root folders of vault
@@ -100,7 +131,7 @@ let items = [...bookmarks];
             return folders.filter(f => f.parent_id === currentFilter.value); // Show subfolders
         }
 
-if (currentFilter.type === 'root') return folders.filter(f => !f.parent_id && f.vault === activeVault);
+        if (currentFilter.type === 'root') return folders.filter(f => !f.parent_id && f.vault === activeVault);
         // "All" view shows root folders
         return folders.filter(f => !f.parent_id);
     }, [folders, currentFilter]);
@@ -140,17 +171,17 @@ if (currentFilter.type === 'root') return folders.filter(f => !f.parent_id && f.
     }, [currentFilter, folders]);
 
     const handleBack = () => {
-    if (breadcrumbs.length > 1) {
-        setFilter('folder', breadcrumbs[breadcrumbs.length - 2].id);
-    } else {
-        setFilter('root'); // Go back to root, not all!
-    }
-};
+        if (breadcrumbs.length > 1) {
+            setFilter('folder', breadcrumbs[breadcrumbs.length - 2].id);
+        } else {
+            setFilter('root'); // Go back to root, not all!
+        }
+    };
 
     const handleSelectAll = () => {
         const visibleBIds = filteredBookmarks.map(b => b.id);
         const visibleFIds = filteredFolders.map(f => f.id);
-        
+
         // Check if every visible item is currently in the Sets
         const allBookmarksSelected = visibleBIds.every(id => selectedBookmarks.has(id));
         const allFoldersSelected = visibleFIds.every(id => selectedFolders.has(id));
@@ -164,9 +195,9 @@ if (currentFilter.type === 'root') return folders.filter(f => !f.parent_id && f.
     };
 
     // Calculate text for the button dynamically
-    const allSelected = (filteredBookmarks.length > 0 || filteredFolders.length > 0) && 
-                        filteredBookmarks.every(b => selectedBookmarks.has(b.id)) && 
-                        filteredFolders.every(f => selectedFolders.has(f.id));
+    const allSelected = (filteredBookmarks.length > 0 || filteredFolders.length > 0) &&
+        filteredBookmarks.every(b => selectedBookmarks.has(b.id)) &&
+        filteredFolders.every(f => selectedFolders.has(f.id));
 
 
     return (
@@ -212,8 +243,8 @@ if (currentFilter.type === 'root') return folders.filter(f => !f.parent_id && f.
                 </div>
 
                 <div className="controls-sep"></div>
-                <button 
-                    className="select-all-btn" 
+                <button
+                    className="select-all-btn"
                     onClick={handleSelectAll}
                 >
                     {allSelected ? 'Deselect all' : 'Select all'}
