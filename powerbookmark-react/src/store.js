@@ -10,6 +10,8 @@ export const useStore = create((set, get) => ({
     isLoading: true,
     error: null,
 
+    jobs: [],
+
     // View & Filter State
     currentFilter: { type: 'all', value: null }, // type: 'all' | 'vault' | 'folder' | 'tag' | 'archived' | 'screenshot'
     viewMode: 'grid', // 'grid' | 'list'
@@ -428,4 +430,25 @@ export const useStore = create((set, get) => ({
             get().loadInitialData(); // Revert on failure
         }
     },
+
+
+    fetchJobsStatus: async () => {
+        try {
+            const res = await api.getJobs();
+            set({ jobs: res.jobs || [] });
+        } catch (err) {
+            console.error("Failed to fetch jobs");
+        }
+    },
+    
+    controlJob: async (jobId, action) => {
+        try {
+            await api.controlJob(jobId, action);
+            get().fetchJobsStatus(); // Refresh UI instantly
+        } catch (err) {
+            alert("Action failed: " + err.message);
+        }
+    },
+
+    
 }));

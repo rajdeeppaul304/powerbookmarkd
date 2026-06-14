@@ -19,7 +19,7 @@ import MassTaggerModal from './components/MassTaggerModal';
 import MassCopyModal from './components/MassCopyModal';
 import MassMoveModal from './components/MassMoveModal';
 import ArchiveViewer from './components/ArchiveViewer';
-
+import JobWidget from './components/JobWidget';
 
 export default function App() {
   const { loadInitialData, isLoading, error, selectedBookmarks, moveBookmarksToFolder } = useStore();
@@ -40,8 +40,18 @@ export default function App() {
       }
     }, 3000);
 
+    // The Job Pager (Every 1s for smooth progress bars)
+    const jobInterval = setInterval(() => {
+      if (!document.hidden) useStore.getState().fetchJobsStatus();
+    }, 1000);
+
+
+
     // 3. Clean up the timer if the app ever unmounts
-    return () => clearInterval(syncInterval);
+    return () => {
+        clearInterval(syncInterval);
+        clearInterval(jobInterval);
+    };
   }, [loadInitialData]);
 
   // --- DND HANDLERS ---
@@ -142,7 +152,10 @@ return (
       <MassTaggerModal />
       <MassCopyModal />
       <MassMoveModal />
-      <ArchiveViewer />      <DragOverlay modifiers={[snapCenterToCursor]}>
+      <ArchiveViewer />     
+      <JobWidget />
+      
+       <DragOverlay modifiers={[snapCenterToCursor]}>
         {activeDragId ? (() => {
           const { selectedBookmarks, selectedFolders } = useStore.getState();
           const totalSelected = selectedBookmarks.size + selectedFolders.size;

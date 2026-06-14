@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import shutil
-
+import uuid
 from playwright.async_api import async_playwright
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ BASE_DIR    = Path(__file__).parent.parent / "data"
 DB_PATH     = BASE_DIR / "bookmarks.db"
 ARCHIVE_DIR = BASE_DIR / "archive"
 FAVICON_DIR = BASE_DIR / "favicons"
+ACTIVE_JOBS = {}
 
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
@@ -346,7 +347,18 @@ class BookmarkUpdate(BaseModel):
     url: str
     notes: str
     tags: list[str] = [] # <--- Added tags!
-    # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+class JobControl(BaseModel):
+    action: str # "pause", "resume", "cancel", "dismiss"
+
+class FetchRequest(BaseModel):
+    bookmark_ids: list[str]
+    fetch_screenshot: bool
+    fetch_archive: bool
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def row_to_dict(row) -> dict:
     return dict(row)
 
@@ -1159,109 +1171,350 @@ def lookup(url: str = Query(...)):
         "favicon_url": row["favicon_url"] or "",
     }
 
+
+
+
+# @app.post("/save")
+# def save(req: SaveRequest):
+#     norm = normalize_url(req.url)
+#     bid  = make_id(norm)
+#     conn = get_db()
+
+#     if req.folder_id:
+#         _validate_folder(conn, req.folder_id)
+
+#     existing = conn.execute("SELECT id, folder_id FROM bookmarks WHERE url_normalized=?", (norm,)).fetchone()
+
+#     ss_path = html_path = fav_path = None
+
+#     if req.screenshot_data:
+#         try:
+#             raw = base64.b64decode(req.screenshot_data.split(",")[-1])
+#             ss_path = str(ARCHIVE_DIR / f"{bid}.jpeg")
+#             Path(ss_path).write_bytes(raw)
+#         except Exception as e:
+#             print(f"Screenshot save failed: {e}")
+#     else:
+#         potential_ss = ARCHIVE_DIR / f"{bid}.jpeg"
+#         if potential_ss.exists():
+#             ss_path = str(potential_ss)
+
+#     if req.archive:
+#         if req.html_data:
+#             try:
+#                 raw = base64.b64decode(req.html_data)
+#                 html_path = str(ARCHIVE_DIR / f"{bid}.html")
+#                 Path(html_path).write_bytes(raw)
+#             except Exception as e:
+#                 print(f"HTML archive save failed: {e}")
+#         else:
+#             potential_html = ARCHIVE_DIR / f"{bid}.html"
+#             if potential_html.exists():
+#                 html_path = str(potential_html)
+
+#     potential_fav = FAVICON_DIR / f"{bid}.ico"
+#     if potential_fav.exists():
+#         fav_path = str(potential_fav)
+#     elif req.favicon_url:
+#         if req.favicon_url.startswith("data:image"):
+#             try:
+#                 header, encoded = req.favicon_url.split(",", 1)
+#                 potential_fav.write_bytes(base64.b64decode(encoded))
+#                 fav_path = str(potential_fav)
+#             except Exception as e:
+#                 print(f"Failed to save base64 favicon: {e}")
+#         elif req.favicon_url.startswith("http"):
+#             try:
+#                 r = urllib.request.Request(req.favicon_url, headers={'User-Agent': 'Mozilla/5.0'})
+#                 with urllib.request.urlopen(r, timeout=5) as response:
+#                     potential_fav.write_bytes(response.read())
+#                     fav_path = str(potential_fav)
+#             except Exception as e:
+#                 print(f"Failed to download favicon: {e}")
+
+#     now = datetime.utcnow().isoformat()
+#     favicon_url = (req.favicon_url or "").strip()
+
+#     if existing:
+#         old_folder_id = existing["folder_id"]
+#         conn.execute("""
+#             UPDATE bookmarks SET
+#                 title=?, vault=?, archived=?, screenshot=?,
+#                 html_path=?, screenshot_path=?, favicon_path=?, notes=?, folder_id=?, favicon_url=?
+#             WHERE id=?
+#         """, (
+#             req.title, req.vault,
+#             1 if (req.archive and html_path) else 0,
+#             1 if ss_path else 0,
+#             html_path, ss_path, fav_path, req.notes, req.folder_id, favicon_url, bid,
+#         ))
+#         # If folder changed, update order row
+#         if old_folder_id != req.folder_id:
+#             move_order_row(conn, req.folder_id, bid, "bookmark")
+#         action = "updated"
+#     else:
+#         conn.execute("""
+#             INSERT INTO bookmarks
+#                 (id, url, url_normalized, title, vault, created_at,
+#                  archived, screenshot, html_path, screenshot_path, favicon_path, notes, folder_id, favicon_url)
+#             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+#         """, (
+#             bid, req.url, norm, req.title, req.vault, now,
+#             1 if (req.archive and html_path) else 0,
+#             1 if ss_path else 0,
+#             html_path, ss_path, fav_path, req.notes, req.folder_id, favicon_url,
+#         ))
+#         # New bookmark goes to bottom of its folder
+#         ensure_order_row(conn, req.folder_id, bid, "bookmark")
+#         action = "saved"
+
+#     conn.execute("DELETE FROM tags WHERE bookmark_id=?", (bid,))
+#     for tag in set(req.tags):
+#         tag = tag.strip().lower()
+#         if tag:
+#             conn.execute("INSERT OR IGNORE INTO tags (bookmark_id, tag) VALUES (?,?)", (bid, tag))
+
+#     conn.commit()
+#     conn.close()
+#     return {"id": bid, "status": action}
+
 @app.post("/save")
 def save(req: SaveRequest):
+    print("\n========== SAVE REQUEST START ==========")
+    print(f"Incoming URL: {req.url}")
+
     norm = normalize_url(req.url)
-    bid  = make_id(norm)
+    print(f"Normalized URL: {norm}")
+
+    bid = make_id(norm)
+    print(f"Generated bookmark ID: {bid}")
+
     conn = get_db()
+    print("Database connection opened")
 
     if req.folder_id:
+        print(f"Validating folder: {req.folder_id}")
         _validate_folder(conn, req.folder_id)
+        print("Folder validation passed")
 
-    existing = conn.execute("SELECT id, folder_id FROM bookmarks WHERE url_normalized=?", (norm,)).fetchone()
+    print("Checking for existing bookmark...")
+    existing = conn.execute(
+        "SELECT id, folder_id FROM bookmarks WHERE url_normalized=?",
+        (norm,)
+    ).fetchone()
+
+    print(f"Existing bookmark found: {bool(existing)}")
 
     ss_path = html_path = fav_path = None
 
+    # ---------------- Screenshot ----------------
     if req.screenshot_data:
+        print("Screenshot data received")
         try:
             raw = base64.b64decode(req.screenshot_data.split(",")[-1])
+            print(f"Screenshot decoded ({len(raw)} bytes)")
+
             ss_path = str(ARCHIVE_DIR / f"{bid}.jpeg")
             Path(ss_path).write_bytes(raw)
+
+            print(f"Screenshot saved to: {ss_path}")
         except Exception as e:
             print(f"Screenshot save failed: {e}")
     else:
+        print("No screenshot data provided")
         potential_ss = ARCHIVE_DIR / f"{bid}.jpeg"
         if potential_ss.exists():
             ss_path = str(potential_ss)
+            print(f"Using existing screenshot: {ss_path}")
+        else:
+            print("No existing screenshot found")
 
+    # ---------------- HTML Archive ----------------
     if req.archive:
+        print("Archive requested")
+
         if req.html_data:
+            print("HTML archive data received")
             try:
                 raw = base64.b64decode(req.html_data)
+                print(f"HTML decoded ({len(raw)} bytes)")
+
                 html_path = str(ARCHIVE_DIR / f"{bid}.html")
                 Path(html_path).write_bytes(raw)
+
+                print(f"HTML archive saved to: {html_path}")
             except Exception as e:
                 print(f"HTML archive save failed: {e}")
         else:
+            print("No HTML archive data provided")
             potential_html = ARCHIVE_DIR / f"{bid}.html"
+
             if potential_html.exists():
                 html_path = str(potential_html)
+                print(f"Using existing HTML archive: {html_path}")
+            else:
+                print("No existing HTML archive found")
+    else:
+        print("Archive not requested")
+
+    # ---------------- Favicon ----------------
+    print("Processing favicon")
 
     potential_fav = FAVICON_DIR / f"{bid}.ico"
+
     if potential_fav.exists():
         fav_path = str(potential_fav)
+        print(f"Using existing favicon: {fav_path}")
+
     elif req.favicon_url:
+        print(f"Favicon URL received: {req.favicon_url[:100]}")
+
         if req.favicon_url.startswith("data:image"):
+            print("Favicon is base64 image")
+
             try:
                 header, encoded = req.favicon_url.split(",", 1)
+
                 potential_fav.write_bytes(base64.b64decode(encoded))
                 fav_path = str(potential_fav)
+
+                print(f"Base64 favicon saved to: {fav_path}")
             except Exception as e:
                 print(f"Failed to save base64 favicon: {e}")
+
         elif req.favicon_url.startswith("http"):
+            print("Downloading favicon from URL")
+
             try:
-                r = urllib.request.Request(req.favicon_url, headers={'User-Agent': 'Mozilla/5.0'})
+                r = urllib.request.Request(
+                    req.favicon_url,
+                    headers={"User-Agent": "Mozilla/5.0"}
+                )
+
                 with urllib.request.urlopen(r, timeout=5) as response:
-                    potential_fav.write_bytes(response.read())
-                    fav_path = str(potential_fav)
+                    data = response.read()
+                    print(f"Downloaded favicon ({len(data)} bytes)")
+
+                    potential_fav.write_bytes(data)
+
+                fav_path = str(potential_fav)
+
+                print(f"Favicon saved to: {fav_path}")
             except Exception as e:
                 print(f"Failed to download favicon: {e}")
+    else:
+        print("No favicon provided")
 
     now = datetime.utcnow().isoformat()
     favicon_url = (req.favicon_url or "").strip()
 
+    print(f"Timestamp: {now}")
+
+    # ---------------- Update Existing ----------------
     if existing:
+        print("Updating existing bookmark")
+
         old_folder_id = existing["folder_id"]
+        print(f"Old folder: {old_folder_id}")
+        print(f"New folder: {req.folder_id}")
+
         conn.execute("""
             UPDATE bookmarks SET
                 title=?, vault=?, archived=?, screenshot=?,
                 html_path=?, screenshot_path=?, favicon_path=?, notes=?, folder_id=?, favicon_url=?
             WHERE id=?
         """, (
-            req.title, req.vault,
+            req.title,
+            req.vault,
             1 if (req.archive and html_path) else 0,
             1 if ss_path else 0,
-            html_path, ss_path, fav_path, req.notes, req.folder_id, favicon_url, bid,
+            html_path,
+            ss_path,
+            fav_path,
+            req.notes,
+            req.folder_id,
+            favicon_url,
+            bid,
         ))
-        # If folder changed, update order row
+
+        print("Bookmark UPDATE executed")
+
         if old_folder_id != req.folder_id:
+            print("Folder changed, updating order row")
             move_order_row(conn, req.folder_id, bid, "bookmark")
+            print("Order row updated")
+
         action = "updated"
+
+    # ---------------- Insert New ----------------
     else:
+        print("Creating new bookmark")
+
         conn.execute("""
             INSERT INTO bookmarks
                 (id, url, url_normalized, title, vault, created_at,
                  archived, screenshot, html_path, screenshot_path, favicon_path, notes, folder_id, favicon_url)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            bid, req.url, norm, req.title, req.vault, now,
+            bid,
+            req.url,
+            norm,
+            req.title,
+            req.vault,
+            now,
             1 if (req.archive and html_path) else 0,
             1 if ss_path else 0,
-            html_path, ss_path, fav_path, req.notes, req.folder_id, favicon_url,
+            html_path,
+            ss_path,
+            fav_path,
+            req.notes,
+            req.folder_id,
+            favicon_url,
         ))
-        # New bookmark goes to bottom of its folder
+
+        print("Bookmark INSERT executed")
+
         ensure_order_row(conn, req.folder_id, bid, "bookmark")
+        print("Order row created")
+
         action = "saved"
 
-    conn.execute("DELETE FROM tags WHERE bookmark_id=?", (bid,))
+    # ---------------- Tags ----------------
+    print("Deleting old tags")
+
+    conn.execute(
+        "DELETE FROM tags WHERE bookmark_id=?",
+        (bid,)
+    )
+
+    print(f"Adding tags: {req.tags}")
+
     for tag in set(req.tags):
         tag = tag.strip().lower()
-        if tag:
-            conn.execute("INSERT OR IGNORE INTO tags (bookmark_id, tag) VALUES (?,?)", (bid, tag))
 
+        if tag:
+            print(f"Inserting tag: {tag}")
+
+            conn.execute(
+                "INSERT OR IGNORE INTO tags (bookmark_id, tag) VALUES (?,?)",
+                (bid, tag)
+            )
+
+    # ---------------- Commit ----------------
+    print("Committing transaction")
     conn.commit()
+
+    print("Closing database connection")
     conn.close()
-    return {"id": bid, "status": action}
+
+    print(f"Request completed successfully. Action={action}")
+    print("=========== SAVE REQUEST END ===========\n")
+
+    return {
+        "id": bid,
+        "status": action
+    }
+
 
 @app.get("/bookmark/{bid}")
 def get_bookmark(bid: str):
@@ -1459,3 +1712,145 @@ def delete_vault(vault_name: str):
     conn.commit()
     conn.close()
     return {"status": "deleted"}
+
+
+# --- JOB API ROUTES ---
+@app.post("/jobs/fetch")
+async def start_fetch_job(req: FetchRequest):
+    job_id = str(uuid.uuid4())
+    ACTIVE_JOBS[job_id] = {
+        "id": job_id,
+        "status": "running",
+        "total": len(req.bookmark_ids),
+        "current": 0,
+        "type": "Bulk Fetch"
+    }
+    
+    # Fire and forget the background task
+    asyncio.create_task(fetch_worker(job_id, req.bookmark_ids, req.fetch_screenshot, req.fetch_archive))
+    
+    return {"job_id": job_id}
+
+@app.get("/jobs")
+def get_all_jobs():
+    return {"jobs": list(ACTIVE_JOBS.values())}
+
+@app.post("/jobs/{job_id}/control")
+def control_job(job_id: str, req: JobControl):
+    if job_id not in ACTIVE_JOBS:
+        return {"status": "not_found"}
+        
+    if req.action == "dismiss":
+        del ACTIVE_JOBS[job_id] # Clean up memory!
+    elif req.action in ["pause", "resume", "canceled"]:
+        ACTIVE_JOBS[job_id]["status"] = req.action if req.action != "resume" else "running"
+        
+    return {"status": "success"}
+
+# The Async Worker (Runs in the background)
+# The Async Worker (Runs in the background)
+async def fetch_worker(job_id: str, bookmark_ids: list[str], do_screenshot: bool, do_archive: bool):
+    conn = get_db()
+    try:
+        # Spin up the browser ONCE for the entire batch
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(viewport={"width": 1280, "height": 800})
+            
+            for bid in bookmark_ids:
+                # 1. Check Job Status for Pause/Cancel
+                while ACTIVE_JOBS.get(job_id, {}).get("status") == "paused":
+                    await asyncio.sleep(1) # Chill here until resumed
+                    
+                if ACTIVE_JOBS.get(job_id, {}).get("status") == "canceled":
+                    break # Exit the loop entirely
+
+                # 2. Check if bookmark still exists in DB
+                row = conn.execute("SELECT url, html_path, favicon_path, archived, screenshot_path FROM bookmarks WHERE id=?", (bid,)).fetchone()
+                if not row:
+                    if job_id in ACTIVE_JOBS:
+                        ACTIVE_JOBS[job_id]["current"] += 1
+                    continue
+                    
+                url = row["url"]
+                current_html = row["html_path"]
+                current_favicon = row["favicon_path"]
+                current_ss = row["screenshot_path"]
+                is_archived = row["archived"]
+
+                page = await context.new_page()
+                try:
+                    # --- ACTUAL PLAYWRIGHT LOGIC ---
+                    await page.goto(url, timeout=20000, wait_until="networkidle")
+                    
+                    ss_path = current_ss
+                    if do_screenshot:
+                        ss_path = str(ARCHIVE_DIR / f"{bid}.jpeg")
+                        await page.screenshot(path=ss_path, type="jpeg", quality=80, full_page=False)
+                        
+                    fav_path = current_favicon
+                    try:
+                        fav_url = await page.evaluate(JS_GET_FAVICON)
+                        if fav_url:
+                            fav_res = await page.request.get(fav_url, timeout=5000)
+                            if fav_res.ok:
+                                fav_disk_path = FAVICON_DIR / f"{bid}.ico"
+                                fav_disk_path.write_bytes(await fav_res.body())
+                                fav_path = str(fav_disk_path)
+                    except Exception as e:
+                        print(f"Failed to fetch favicon for {url}: {e}")
+
+                    await page.close()
+
+                    html_path = current_html
+                    if do_archive:
+                        target_path = str(ARCHIVE_DIR / f"{bid}.html")
+                        cmd = [
+                            "single-file",
+                            url,
+                            target_path,
+                            "--browser-executable-path", "/usr/bin/chromium"
+                        ]
+                        proc = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        stdout, stderr = await proc.communicate()
+
+                        if proc.returncode == 0:
+                            html_path = target_path
+                            is_archived = 1
+                        else:
+                            print(f"single-file failed for {url}: {stderr.decode('utf-8')}")
+                            
+                    # --- UPDATE DATABASE ---
+                    conn.execute("""
+                        UPDATE bookmarks
+                        SET screenshot=1, screenshot_path=?, archived=?, html_path=?, favicon_path=?
+                        WHERE id=?
+                    """, (ss_path, is_archived, html_path, fav_path, bid))
+                    conn.commit()
+
+                except Exception as e:
+                    print(f"Failed to fetch {url}: {e}")
+                    if not page.is_closed():
+                        await page.close()
+
+                # 3. Increment progress bar
+                if job_id in ACTIVE_JOBS:
+                    ACTIVE_JOBS[job_id]["current"] += 1
+
+            # Safely close browser when loop is done
+            await browser.close()
+
+        # Job Finished Successfully!
+        if job_id in ACTIVE_JOBS and ACTIVE_JOBS[job_id]["status"] != "canceled":
+            ACTIVE_JOBS[job_id]["status"] = "completed"
+            
+    except Exception as e:
+        print(f"Job {job_id} crashed: {e}")
+        if job_id in ACTIVE_JOBS:
+            ACTIVE_JOBS[job_id]["status"] = "error"
+    finally:
+        conn.close()

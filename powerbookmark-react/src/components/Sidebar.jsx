@@ -1,14 +1,14 @@
 // src/components/Sidebar.jsx
 import { useNavigate, useLocation } from 'react-router-dom'; // <--- Add this
 import { useStore } from '../store';
-import FolderTree from './FolderTree'; 
+import FolderTree from './FolderTree';
 
 
 export default function Sidebar() {
-    const navigate = useNavigate();
+  const navigate = useNavigate();
   const location = useLocation();
-  const { 
-    sidebarPrimaryView, setSidebarPrimaryView, 
+  const {
+    sidebarPrimaryView, setSidebarPrimaryView,
     sidebarTagsView, toggleSidebarTags,
     vaults, bookmarks, folders, currentFilter, setFilter,
     setNewFolderOpen, setNewBookmarkOpen // <--- ADD THESE TWO
@@ -41,23 +41,23 @@ export default function Sidebar() {
 
       {/* Toggles */}
       <div className="sidebar-toggles">
-        <div 
-          className={`sb-toggle ${sidebarPrimaryView === 'browse' ? 'active' : ''}`} 
+        <div
+          className={`sb-toggle ${sidebarPrimaryView === 'browse' ? 'active' : ''}`}
           onClick={() => setSidebarPrimaryView('browse')}
           title="Browse Bookmarks"
         >🗂</div>
-        <div 
-          className={`sb-toggle ${sidebarPrimaryView === 'vaults' ? 'active' : ''}`} 
+        <div
+          className={`sb-toggle ${sidebarPrimaryView === 'vaults' ? 'active' : ''}`}
           onClick={() => setSidebarPrimaryView('vaults')}
           title="Vaults"
         >🏦</div>
-        <div 
-          className={`sb-toggle ${sidebarPrimaryView === 'folders' ? 'active' : ''}`} 
+        <div
+          className={`sb-toggle ${sidebarPrimaryView === 'folders' ? 'active' : ''}`}
           onClick={() => setSidebarPrimaryView('folders')}
           title="Folders"
         >📁</div>
-        <div 
-          className={`sb-toggle ${sidebarTagsView ? 'active' : ''}`} 
+        <div
+          className={`sb-toggle ${sidebarTagsView ? 'active' : ''}`}
           onClick={() => toggleSidebarTags()}
           title="Top Tags"
         >#</div>
@@ -98,8 +98,8 @@ export default function Sidebar() {
           <div className="sidebar-section-body">
             {vaults.length === 0 ? <div className="sidebar-empty">No vaults yet</div> : null}
             {vaults.map(v => (
-              <div 
-                key={v.name} 
+              <div
+                key={v.name}
                 className={`sidebar-item ${isActive('vault', v.name) ? 'active' : ''}`}
                 onClick={() => handleFilterClick('vault', v.name)}
               >
@@ -119,11 +119,11 @@ export default function Sidebar() {
             <span className="sidebar-label">Folders</span>
           </div>
           <div className="sidebar-section-body">
-             {folders?.length === 0 ? (
-               <div className="sidebar-empty">No folders yet</div>
-             ) : (
-               <FolderTree parentId={null} depth={0} />
-             )}
+            {folders?.length === 0 ? (
+              <div className="sidebar-empty">No folders yet</div>
+            ) : (
+              <FolderTree parentId={null} depth={0} />
+            )}
           </div>
         </div>
       )}
@@ -139,8 +139,8 @@ export default function Sidebar() {
             <div className="sidebar-section-body">
               {topTags.length === 0 ? <div className="sidebar-empty">No tags yet</div> : null}
               {topTags.map(([tag, count]) => (
-                <div 
-                  key={tag} 
+                <div
+                  key={tag}
                   className={`sidebar-item ${isActive('tag', tag) ? 'active' : ''}`}
                   onClick={() => handleFilterClick('tag', tag)}
                 >
