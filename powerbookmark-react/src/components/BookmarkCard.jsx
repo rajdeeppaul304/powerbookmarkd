@@ -108,7 +108,7 @@ export default function BookmarkCard({ bm }) {
     >
       <div className="card-thumb">
         {bm.screenshot
-          ? <img src={`${API_URL}/static/archive/${bm.id}.jpeg`} alt="" onError={(e) => e.target.style.display = 'none'} />
+          ? <img src={`${API_URL}/static/archive/${bm.screenshot_path.split('/').pop()}`} alt="" onError={(e) => e.target.style.display = 'none'} />
           : <div className="card-thumb-placeholder">🔖</div>
         }
       </div>
@@ -117,7 +117,7 @@ export default function BookmarkCard({ bm }) {
         <div className="card-title">{bm.title || bm.url}</div>
         <div className="card-url" style={{ display: 'flex', alignItems: 'center' }}>
           {bm.favicon_path
-            ? <img src={`${API_URL}/static/favicons/${bm.id}.ico`} style={{ width: 14, height: 14, marginRight: 6, borderRadius: 2 }} onError={(e) => e.target.style.display = 'none'} />
+            ? <img src={`${API_URL}/static/favicons/${bm.favicon_path.split('/').pop()}`} style={{ width: 14, height: 14, marginRight: 6, borderRadius: 2 }} onError={(e) => e.target.style.display = 'none'} />
             : <span style={{ fontSize: 12, marginRight: 6, opacity: 0.7 }}>🌐</span>
           }
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hostOf(bm.url)}</span>

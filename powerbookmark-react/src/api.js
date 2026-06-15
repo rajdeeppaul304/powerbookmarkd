@@ -157,4 +157,32 @@ export const api = {
     getJobs: () => fetch(`${API_URL}/jobs`).then(handleResponse),
     startFetchJob: (data) => fetch(`${API_URL}/jobs/fetch`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(handleResponse),
     controlJob: (id, action) => fetch(`${API_URL}/jobs/${id}/control`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) }).then(handleResponse),
+bulkImport: (data) => fetch(`${API_URL}/import`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }).then(handleResponse),
+
+    // Unified Bulk Move
+    bulkMoveItems: (bookmarkIds, folderIds, targetFolderId) =>
+        fetch(`${API_URL}/items/bulk-move`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+                bookmark_ids: bookmarkIds, 
+                folder_ids: folderIds, 
+                target_folder_id: targetFolderId 
+            }),
+        }).then(handleResponse),
+
+    // Unified Bulk Copy
+    bulkCopyItems: (bookmarkIds, folderIds, targetFolderId, targetVault) =>
+        fetch(`${API_URL}/items/bulk-copy`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+                bookmark_ids: bookmarkIds, 
+                folder_ids: folderIds, 
+                target_folder_id: targetFolderId, 
+                target_vault: targetVault 
+            }),
+        }).then(handleResponse),
+
+
 };

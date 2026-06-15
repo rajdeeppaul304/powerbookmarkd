@@ -10,7 +10,9 @@ export default function BookmarkRow({ bm }) {
   const {
     selectedBookmarks, toggleBookmarkSelection, setDetailBookmark,
     setArchiveViewBookmark, setFilter, setContextMenu,
-    setTargetFetchIds, setBulkFetchOpen
+    setTargetFetchIds, setBulkFetchOpen,
+    requestDeletion, // <--- Add the new delete funnel
+    setClipboard     // <--- Add the clipboard setter
   } = useStore();
 
   const isSelected = selectedBookmarks.has(bm.id);
@@ -54,6 +56,38 @@ export default function BookmarkRow({ bm }) {
       label: '✏️ Edit',
       action: () => setDetailBookmark(bm, true)
     },
+    { separator: true },
+    {
+      label: '⧉ Copy',
+      action: () => {
+        // If the item is part of a multi-selection, copy the whole selection!
+        // Otherwise, just copy this single item.
+        if (selectedBookmarks.has(bm.id)) {
+           const state = useStore.getState();
+           setClipboard('copy', { 
+               bookmarkIds: Array.from(state.selectedBookmarks), 
+               folderIds: Array.from(state.selectedFolders) 
+           });
+        } else {
+           setClipboard('copy', { bookmarkIds: [bm.id], folderIds: [] });
+        }
+      }
+    },
+    {
+      label: '✂️ Cut',
+      action: () => {
+        if (selectedBookmarks.has(bm.id)) {
+           const state = useStore.getState();
+           setClipboard('cut', { 
+               bookmarkIds: Array.from(state.selectedBookmarks), 
+               folderIds: Array.from(state.selectedFolders) 
+           });
+        } else {
+           setClipboard('cut', { bookmarkIds: [bm.id], folderIds: [] });
+        }
+      }
+    },
+    { separator: true },
     {
       label: '📄 Open Archive',
       disabled: !bm.archived,
@@ -73,15 +107,16 @@ export default function BookmarkRow({ bm }) {
     {
       label: '🗑 Delete',
       danger: true,
-      action: async () => {
-        if (!window.confirm(`Delete "${bm.title || hostOf(bm.url)}"?`)) return;
-        try {
-          await api.bulkDeleteItems([bm.id], []);
-          useStore.setState(state => ({
-            bookmarks: state.bookmarks.filter(b => b.id !== bm.id)
-          }));
-        } catch (err) {
-          alert('Failed to delete: ' + err.message);
+      action: () => {
+        // Use our shiny new single point of truth!
+        if (selectedBookmarks.has(bm.id)) {
+            const state = useStore.getState();
+            requestDeletion({ 
+                bookmarkIds: Array.from(state.selectedBookmarks), 
+                folderIds: Array.from(state.selectedFolders) 
+            });
+        } else {
+            requestDeletion({ bookmarkIds: [bm.id], folderIds: [] });
         }
       }
     }
@@ -134,7 +169,7 @@ export default function BookmarkRow({ bm }) {
       >
         <div className="row-thumb">
           {bm.screenshot
-            ? <img src={`${API_URL}/static/archive/${bm.id}.jpeg`} alt="" onError={(e) => e.target.style.display = 'none'} />
+            ? <img src={`${API_URL}/static/archive/${bm.screenshot_path.split('/').pop()}`} alt="" onError={(e) => e.target.style.display = 'none'} />
             : <div className="row-thumb-placeholder">🔖</div>
           }
         </div>
@@ -143,7 +178,7 @@ export default function BookmarkRow({ bm }) {
           <div className="row-title">{bm.title || bm.url}</div>
           <div className="row-url" style={{ display: 'flex', alignItems: 'center' }}>
             {bm.favicon_path
-              ? <img src={`${API_URL}/static/favicons/${bm.id}.ico`} style={{ width: 14, height: 14, marginRight: 6, borderRadius: 2 }} onError={(e) => e.target.style.display = 'none'} />
+              ? <img src={`${API_URL}/static/favicons/${bm.favicon_path.split('/').pop()}`} style={{ width: 14, height: 14, marginRight: 6, borderRadius: 2 }} onError={(e) => e.target.style.display = 'none'} />
               : <span style={{ fontSize: 12, marginRight: 6, opacity: 0.7 }}>🌐</span>
             }
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

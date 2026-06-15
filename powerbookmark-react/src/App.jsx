@@ -21,6 +21,8 @@ import MassMoveModal from './components/MassMoveModal';
 import ArchiveViewer from './components/ArchiveViewer';
 import JobWidget from './components/JobWidget';
 import ContextMenu from './components/ContextMenu';
+import DeleteConfirmationModal from './components/DeleteConfirmationModal';
+
 export default function App() {
 const { loadInitialData, isLoading, error, selectedBookmarks, 
         moveBookmarksToFolder, contextMenu, setContextMenu } = useStore();
@@ -154,6 +156,7 @@ return (
       <MassCopyModal />
       <MassMoveModal />
       <ArchiveViewer />     
+      <DeleteConfirmationModal />
       <JobWidget />
 
       {useStore.getState().contextMenu && (

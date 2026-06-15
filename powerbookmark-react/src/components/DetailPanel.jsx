@@ -28,6 +28,9 @@ export default function DetailPanel() {
 
   if (!bm) return null;
 
+  console.log("DetailPanel bm:", bm);
+
+
   const closePanel = () => {
     setDetailBookmark(null);
     setEditingDetails(false); // Reset edit state when closing
@@ -85,7 +88,7 @@ export default function DetailPanel() {
         <div className="detail-body">
           <div className="detail-thumb">
             {bm.screenshot ? (
-              <img src={`${API_URL}/static/archive/${bm.id}.jpeg`} alt="" onError={(e) => e.target.style.display='none'} />
+<img src={`${API_URL}/static/archive/${bm.screenshot_path.split('/').pop()}`} alt="" onError={(e) => e.target.style.display='none'} />
             ) : (
               <div className="detail-thumb-placeholder">🔖</div>
             )}

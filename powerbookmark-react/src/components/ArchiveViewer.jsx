@@ -7,7 +7,8 @@ export default function ArchiveViewer() {
 
   if (!bm) return null;
 
-  const archiveUrl = `${API_URL}/static/archive/${bm.id}.html`;
+  const archiveUrl = `${API_URL}/static/archive/${bm.html_path.split('/').pop()}`;
+
 
   return (
     <div className="modal-overlay open" onClick={() => setArchiveViewBookmark(null)} style={{ zIndex: 99999 }}>

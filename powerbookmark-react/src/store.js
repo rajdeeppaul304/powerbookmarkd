@@ -10,6 +10,8 @@ export const useStore = create((set, get) => ({
     isLoading: true,
     error: null,
     contextMenu: null,
+    skipDeleteConfirmation: localStorage.getItem('pb_skip_delete_confirm') === 'true',
+    pendingDeletionPayload: null, // Holds { bookmarkIds: [], folderIds: [] } when modal is open
 
     jobs: [],
 
@@ -362,31 +364,31 @@ export const useStore = create((set, get) => ({
         }
     },
 
-    executeBulkDelete: async () => {
-        const state = get();
-        const bIds = Array.from(state.selectedBookmarks);
-        const fIds = Array.from(state.selectedFolders);
+    // executeBulkDelete: async () => {
+    //     const state = get();
+    //     const bIds = Array.from(state.selectedBookmarks);
+    //     const fIds = Array.from(state.selectedFolders);
 
-        if (bIds.length === 0 && fIds.length === 0) return;
+    //     if (bIds.length === 0 && fIds.length === 0) return;
 
-        // Native browser prompt window
-        const msg = `Are you sure you want to permanently delete ${bIds.length} bookmark(s) and ${fIds.length} folder(s)?`;
-        if (!window.confirm(msg)) return;
+    //     // Native browser prompt window
+    //     const msg = `Are you sure you want to permanently delete ${bIds.length} bookmark(s) and ${fIds.length} folder(s)?`;
+    //     if (!window.confirm(msg)) return;
 
-        try {
-            await api.bulkDeleteItems(bIds, fIds);
+    //     try {
+    //         await api.bulkDeleteItems(bIds, fIds);
 
-            // Wipe items from current app memory layout state
-            set(state => ({
-                bookmarks: state.bookmarks.filter(b => !bIds.includes(b.id)),
-                folders: state.folders.filter(f => !fIds.includes(f.id)),
-                selectedBookmarks: new Set(),
-                selectedFolders: new Set()
-            }));
-        } catch (err) {
-            alert("Failed to delete items: " + err.message);
-        }
-    },
+    //         // Wipe items from current app memory layout state
+    //         set(state => ({
+    //             bookmarks: state.bookmarks.filter(b => !bIds.includes(b.id)),
+    //             folders: state.folders.filter(f => !fIds.includes(f.id)),
+    //             selectedBookmarks: new Set(),
+    //             selectedFolders: new Set()
+    //         }));
+    //     } catch (err) {
+    //         alert("Failed to delete items: " + err.message);
+    //     }
+    // },
 
     setDefaultVault: (vaultName) => {
         localStorage.setItem('pb_default_vault', vaultName);
@@ -451,5 +453,127 @@ export const useStore = create((set, get) => ({
         }
     },
 setContextMenu: (menuData) => set({ contextMenu: menuData }),
+
+// --- Delete Actions ---
+    setSkipDeleteConfirmation: (skip) => {
+        localStorage.setItem('pb_skip_delete_confirm', skip);
+        set({ skipDeleteConfirmation: skip });
+    },
+
+    // The Universal Funnel: ALL deletes go through here
+    requestDeletion: (payload) => {
+        const { skipDeleteConfirmation } = get();
+        if (skipDeleteConfirmation) {
+            get()._executeDeletion(payload);
+        } else {
+            set({ pendingDeletionPayload: payload });
+        }
+    },
+
+    cancelDeletion: () => set({ pendingDeletionPayload: null }),
+
+    confirmDeletion: (rememberPreference = false) => {
+        if (rememberPreference) {
+            get().setSkipDeleteConfirmation(true);
+        }
+        const payload = get().pendingDeletionPayload;
+        set({ pendingDeletionPayload: null });
+        if (payload) get()._executeDeletion(payload);
+    },
+
+    // The Engine: Handles the actual API call and UI optimistic updates
+    _executeDeletion: async ({ bookmarkIds = [], folderIds = [] }) => {
+    if (bookmarkIds.length === 0 && folderIds.length === 0) return;
+
+    try {
+        const result = await api.bulkDeleteItems(bookmarkIds, folderIds);
+        
+        const deletedBIds = new Set(result.deleted_bookmark_ids);
+        const deletedFIds = new Set(result.deleted_folder_ids);
+
+        set(state => ({
+            bookmarks: state.bookmarks.filter(b => !deletedBIds.has(b.id)),
+            folders: state.folders.filter(f => !deletedFIds.has(f.id)),
+            selectedBookmarks: new Set(),
+            selectedFolders: new Set()
+        }));
+    } catch (err) {
+        alert("Failed to delete items: " + err.message);
+    }
+    },
+
+
+    // --- Clipboard State ---
+    // Format: { action: 'copy' | 'cut', payload: { bookmarkIds: [], folderIds: [] } }
+    clipboard: null, 
+
+    // --- Clipboard Actions ---
+    setClipboard: (action, payload) => set({ clipboard: { action, payload } }),
+    clearClipboard: () => set({ clipboard: null }),
+
+
+    // --- Paste Execution ---
+    executePaste: async (targetFolderId) => {
+        const state = get();
+        const { clipboard, activeVault } = state;
+
+        if (!clipboard) return;
+
+        const { action, payload } = clipboard;
+        const { bookmarkIds, folderIds } = payload;
+
+        if (bookmarkIds.length === 0 && folderIds.length === 0) return;
+
+        // ==========================================
+        // CUT (MOVE) LOGIC
+        // ==========================================
+        if (action === 'cut') {
+            // 1. Optimistic UI (Instant Snap)
+            set({
+                bookmarks: state.bookmarks.map(b =>
+                    bookmarkIds.includes(b.id) ? { ...b, folder_id: targetFolderId } : b
+                ),
+                folders: state.folders.map(f =>
+                    folderIds.includes(f.id) ? { ...f, parent_id: targetFolderId } : f
+                ),
+                clipboard: null, // Clear clipboard after a cut/move!
+                selectedBookmarks: new Set(),
+                selectedFolders: new Set()
+            });
+
+            // 2. Background Sync
+            try {
+                // We will build this unified endpoint in Python next!
+                await api.bulkMoveItems(bookmarkIds, folderIds, targetFolderId);
+            } catch (err) {
+                alert("Failed to move items: " + err.message);
+                get().loadInitialData(); // Rollback on failure
+            }
+        }
+
+        // ==========================================
+        // COPY LOGIC
+        // ==========================================
+        if (action === 'copy') {
+            try {
+                // We will build this unified recursive endpoint in Python next!
+                const res = await api.bulkCopyItems(bookmarkIds, folderIds, targetFolderId, activeVault);
+
+                // Inject the newly cloned items returned by the server into the UI
+                set(state => ({
+                    bookmarks: [...state.bookmarks, ...(res.new_bookmarks || [])],
+                    folders: [...state.folders, ...(res.new_folders || [])],
+                    selectedBookmarks: new Set(),
+                    selectedFolders: new Set()
+                }));
+                
+                // NOTE: We do NOT set clipboard to null here. 
+                // Users expect to hit Ctrl+V multiple times to paste multiple copies!
+            } catch (err) {
+                alert("Failed to copy items: " + err.message);
+            }
+        }
+    },
+
 
 }));

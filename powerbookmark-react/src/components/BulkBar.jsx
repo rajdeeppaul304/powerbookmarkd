@@ -7,9 +7,9 @@ export default function BulkBar() {
         clearSelection, 
         setTargetFetchIds, 
         setBulkFetchOpen,
-        setMassCopyOpen,    // Hooking up the Copy state setter
-        setMassTaggerOpen,  // Hooking up the Tag state setter
-        executeBulkDelete,
+        setMassCopyOpen,
+        setMassTaggerOpen,
+        requestDeletion, // <--- Swap this in
         setMassMoveOpen
     } = useStore();
 
@@ -26,12 +26,11 @@ export default function BulkBar() {
             <span className="bulk-count">{label}</span>
             <button 
                 className="bulk-btn blue" 
-                onClick={() => setMassMoveOpen(true)} // <--- WIRE THIS
+                onClick={() => setMassMoveOpen(true)}
             >
                 ✦ Move
             </button>
             
-            {/* 1. Wire up Mass Copy */}
             <button 
                 className="bulk-btn green" 
                 style={{ opacity: bmCount ? 1 : 0.4, pointerEvents: bmCount ? 'auto' : 'none' }}
@@ -40,7 +39,6 @@ export default function BulkBar() {
                 ⧉ Copy
             </button>
 
-            {/* 2. Wire up Mass Tag */}
             <button
                 className="bulk-btn"
                 style={{ opacity: bmCount ? 1 : 0.4, pointerEvents: bmCount ? 'auto' : 'none' }}
@@ -53,11 +51,22 @@ export default function BulkBar() {
                 className="bulk-btn"
                 style={{ opacity: bmCount && !folCount ? 1 : 0.4, pointerEvents: bmCount && !folCount ? 'auto' : 'none' }}
                 onClick={() => {
-                    setTargetFetchIds(Array.from(selectedBookmarks)); // Send the selected IDs to the store
-                    setBulkFetchOpen(true); // Open the modal
+                    setTargetFetchIds(Array.from(selectedBookmarks));
+                    setBulkFetchOpen(true);
                 }}
             >⚡ Fetch</button>
-            <button className="bulk-btn red" onClick={executeBulkDelete}>🗑 Delete</button>
+            
+            {/* --- WIRE THE NEW FUNNEL HERE --- */}
+            <button 
+                className="bulk-btn red" 
+                onClick={() => requestDeletion({ 
+                    bookmarkIds: Array.from(selectedBookmarks), 
+                    folderIds: Array.from(selectedFolders) 
+                })}
+            >
+                🗑 Delete
+            </button>
+            
             <button className="bulk-btn desel" onClick={clearSelection}>✕ Deselect</button>
         </div>
     );
