@@ -8,11 +8,11 @@ import { API_URL, api } from '../api';
 
 export default function BookmarkRow({ bm }) {
   const {
-    selectedBookmarks, toggleBookmarkSelection, setDetailBookmark,
+    selectedBookmarks, toggleBookmarkSelection, setDetailBookmark, selectedFolders,
     setArchiveViewBookmark, setFilter, setContextMenu,
     setTargetFetchIds, setBulkFetchOpen,
     requestDeletion, // <--- Add the new delete funnel
-    setClipboard     // <--- Add the clipboard setter
+    setClipboard, setSelection  // <--- Add the clipboard setter
   } = useStore();
 
   const isSelected = selectedBookmarks.has(bm.id);
@@ -47,7 +47,53 @@ export default function BookmarkRow({ bm }) {
     backgroundColor: isSelected ? 'rgba(59,130,246,0.05)' : '',
   };
 
-  const menuOptions = [
+
+  const isInMultiSelect = selectedBookmarks.has(bm.id) &&
+    (selectedBookmarks.size + selectedFolders.size) > 1;
+
+
+  const menuOptions = isInMultiSelect ? [
+    {
+      label: '⧉ Copy',
+      action: () => {
+        const state = useStore.getState();
+        setClipboard('copy', {
+          bookmarkIds: Array.from(state.selectedBookmarks),
+          folderIds: Array.from(state.selectedFolders)
+        });
+      }
+    },
+    {
+      label: '✂️ Cut',
+      action: () => {
+        const state = useStore.getState();
+        setClipboard('cut', {
+          bookmarkIds: Array.from(state.selectedBookmarks),
+          folderIds: Array.from(state.selectedFolders)
+        });
+      }
+    },
+    ...(selectedFolders.size === 0 ? [{
+      label: '⚡ Fetch Archive',
+      action: () => {
+        const state = useStore.getState();
+        setTargetFetchIds(Array.from(state.selectedBookmarks));
+        setBulkFetchOpen(true);
+      }
+    }] : []),
+    { separator: true },
+    {
+      label: '🗑 Delete',
+      danger: true,
+      action: () => {
+        const state = useStore.getState();
+        requestDeletion({
+          bookmarkIds: Array.from(state.selectedBookmarks),
+          folderIds: Array.from(state.selectedFolders)
+        });
+      }
+    }
+  ] : [
     {
       label: '↗ Open Link',
       action: () => window.open(bm.url, '_blank')
@@ -63,13 +109,13 @@ export default function BookmarkRow({ bm }) {
         // If the item is part of a multi-selection, copy the whole selection!
         // Otherwise, just copy this single item.
         if (selectedBookmarks.has(bm.id)) {
-           const state = useStore.getState();
-           setClipboard('copy', { 
-               bookmarkIds: Array.from(state.selectedBookmarks), 
-               folderIds: Array.from(state.selectedFolders) 
-           });
+          const state = useStore.getState();
+          setClipboard('copy', {
+            bookmarkIds: Array.from(state.selectedBookmarks),
+            folderIds: Array.from(state.selectedFolders)
+          });
         } else {
-           setClipboard('copy', { bookmarkIds: [bm.id], folderIds: [] });
+          setClipboard('copy', { bookmarkIds: [bm.id], folderIds: [] });
         }
       }
     },
@@ -77,13 +123,13 @@ export default function BookmarkRow({ bm }) {
       label: '✂️ Cut',
       action: () => {
         if (selectedBookmarks.has(bm.id)) {
-           const state = useStore.getState();
-           setClipboard('cut', { 
-               bookmarkIds: Array.from(state.selectedBookmarks), 
-               folderIds: Array.from(state.selectedFolders) 
-           });
+          const state = useStore.getState();
+          setClipboard('cut', {
+            bookmarkIds: Array.from(state.selectedBookmarks),
+            folderIds: Array.from(state.selectedFolders)
+          });
         } else {
-           setClipboard('cut', { bookmarkIds: [bm.id], folderIds: [] });
+          setClipboard('cut', { bookmarkIds: [bm.id], folderIds: [] });
         }
       }
     },
@@ -110,13 +156,13 @@ export default function BookmarkRow({ bm }) {
       action: () => {
         // Use our shiny new single point of truth!
         if (selectedBookmarks.has(bm.id)) {
-            const state = useStore.getState();
-            requestDeletion({ 
-                bookmarkIds: Array.from(state.selectedBookmarks), 
-                folderIds: Array.from(state.selectedFolders) 
-            });
+          const state = useStore.getState();
+          requestDeletion({
+            bookmarkIds: Array.from(state.selectedBookmarks),
+            folderIds: Array.from(state.selectedFolders)
+          });
         } else {
-            requestDeletion({ bookmarkIds: [bm.id], folderIds: [] });
+          requestDeletion({ bookmarkIds: [bm.id], folderIds: [] });
         }
       }
     }
@@ -125,6 +171,10 @@ export default function BookmarkRow({ bm }) {
   const handleContextMenu = (e) => {
     e.preventDefault();
     e.stopPropagation();
+    // If right-clicking something NOT in the current multi-selection, select it exclusively
+    if (!selectedBookmarks.has(bm.id)) {
+      setSelection([bm.id], []);
+    }
     setContextMenu({ x: e.clientX, y: e.clientY, options: menuOptions });
   };
 
@@ -154,9 +204,9 @@ export default function BookmarkRow({ bm }) {
         onClick={(e) => e.stopPropagation()}
       >
         <svg width="14" height="18" viewBox="0 0 10 14" fill="currentColor" style={{ outline: 'none' }}>
-          <circle cx="3" cy="2.5" r="1.2"/><circle cx="7" cy="2.5" r="1.2"/>
-          <circle cx="3" cy="7"   r="1.2"/><circle cx="7" cy="7"   r="1.2"/>
-          <circle cx="3" cy="11.5" r="1.2"/><circle cx="7" cy="11.5" r="1.2"/>
+          <circle cx="3" cy="2.5" r="1.2" /><circle cx="7" cy="2.5" r="1.2" />
+          <circle cx="3" cy="7" r="1.2" /><circle cx="7" cy="7" r="1.2" />
+          <circle cx="3" cy="11.5" r="1.2" /><circle cx="7" cy="11.5" r="1.2" />
         </svg>
       </div>
 

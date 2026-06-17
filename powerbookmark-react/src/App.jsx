@@ -25,8 +25,9 @@ import DeleteConfirmationModal from './components/DeleteConfirmationModal';
 import Trash from './pages/Trash';
 
 export default function App() {
-const { loadInitialData, isLoading, error, selectedBookmarks, 
-        moveBookmarksToFolder, contextMenu, setContextMenu } = useStore();
+const { loadInitialData, isLoading, error, contextMenu, setContextMenu, clearSelection } = useStore();
+
+
   const [activeDragId, setActiveDragId] = useState(null);
 
   const location = useLocation();
@@ -57,6 +58,26 @@ const { loadInitialData, isLoading, error, selectedBookmarks,
         clearInterval(jobInterval);
     };
   }, [loadInitialData]);
+
+  // CHANGE 2: Add this useEffect after the existing ones
+useEffect(() => {
+  const handleMouseDown = (e) => {
+    // Close context menu if clicking outside it
+    if (contextMenu && !e.target.closest('.ctx-menu')) {
+      setContextMenu(null);
+    }
+    // Deselect if clicking on empty space
+    if (!e.target.closest(
+      '.bookmark-row, .bookmark-card, .folder-card, .ctx-menu, .bulk-bar, .detail-panel'
+    )) {
+      clearSelection();
+    }
+  };
+  document.addEventListener('mousedown', handleMouseDown);
+  return () => document.removeEventListener('mousedown', handleMouseDown);
+}, [clearSelection, contextMenu, setContextMenu]);  // <-- add contextMenu + setContextMenu to deps
+
+
 
   // --- DND HANDLERS ---
   const sensors = useSensors(
@@ -161,15 +182,14 @@ return (
       <ArchiveViewer />     
       <DeleteConfirmationModal />
       <JobWidget />
-
-      {useStore.getState().contextMenu && (
-        <ContextMenu 
-          x={useStore.getState().contextMenu.x} 
-          y={useStore.getState().contextMenu.y} 
-          options={useStore.getState().contextMenu.options} 
-          onClose={() => useStore.getState().setContextMenu(null)} 
-        />
-      )}
+{contextMenu && (
+  <ContextMenu
+    x={contextMenu.x}
+    y={contextMenu.y}
+    options={contextMenu.options}
+    onClose={() => setContextMenu(null)}
+  />
+)}
       
        <DragOverlay modifiers={[snapCenterToCursor]}>
         {activeDragId ? (() => {

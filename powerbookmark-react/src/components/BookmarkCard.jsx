@@ -14,6 +14,10 @@ export default function BookmarkCard({ bm }) {
     setFilter,
     setTargetFetchIds,
     setBulkFetchOpen,
+      setSelection,       // ADD
+  requestDeletion,    // ADD
+  setClipboard,       // ADD
+
   } = useStore();
 
   const isSelected = selectedBookmarks.has(bm.id);
@@ -32,6 +36,36 @@ export default function BookmarkCard({ bm }) {
       label: '✏️ Edit',
       action: () => setDetailBookmark(bm, true)
     },
+    { separator: true },
+{
+  label: '⧉ Copy',
+  action: () => {
+    if (selectedBookmarks.has(bm.id)) {
+      const state = useStore.getState();
+      setClipboard('copy', {
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    } else {
+      setClipboard('copy', { bookmarkIds: [bm.id], folderIds: [] });
+    }
+  }
+},
+{
+  label: '✂️ Cut',
+  action: () => {
+    if (selectedBookmarks.has(bm.id)) {
+      const state = useStore.getState();
+      setClipboard('cut', {
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    } else {
+      setClipboard('cut', { bookmarkIds: [bm.id], folderIds: [] });
+    }
+  }
+},
+
     {
       label: '📄 Open Archive',
       disabled: !bm.archived,
@@ -48,28 +82,31 @@ export default function BookmarkCard({ bm }) {
       }
     },
     { separator: true },
-    {
-      label: '🗑 Delete',
-      danger: true,
-      action: async () => {
-        if (!window.confirm('Delete this bookmark?')) return;
-        try {
-          await api.bulkDeleteItems([bm.id], []);
-          useStore.setState(state => ({
-            bookmarks: state.bookmarks.filter(b => b.id !== bm.id)
-          }));
-        } catch (err) {
-          alert('Failed to delete: ' + err.message);
-        }
-      }
+{
+  label: '🗑 Delete',
+  danger: true,
+  action: () => {
+    if (selectedBookmarks.has(bm.id)) {
+      const state = useStore.getState();
+      requestDeletion({
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    } else {
+      requestDeletion({ bookmarkIds: [bm.id], folderIds: [] });
     }
+  }
+}
   ];
 
-  const handleContextMenu = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, options: menuOptions });
-  };
+const handleContextMenu = (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!selectedBookmarks.has(bm.id)) {
+    setSelection([bm.id], []);
+  }
+  setContextMenu({ x: e.clientX, y: e.clientY, options: menuOptions });
+};
 
   // Same trick as BookmarkRow — uses rect coords, dnd-kit can't swallow it
   const handleMenuButton = (e) => {

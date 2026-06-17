@@ -6,7 +6,7 @@ import { useStore } from '../store';
 import { api } from '../api';
 
 export default function FolderRow({ folder }) {
-  const { selectedFolders, toggleFolderSelection, setFilter, renameFolder, setContextMenu } = useStore();
+const { selectedFolders, toggleFolderSelection, setFilter, renameFolder, setContextMenu, setSelection, selectedBookmarks } = useStore();
   const isSelected = selectedFolders.has(folder.id);
 
   const { setNodeRef: setSortRef, setActivatorNodeRef, listeners: sortListeners, attributes: sortAttrs, transform, transition, isDragging: isSorting } = useSortable({
@@ -37,7 +37,43 @@ export default function FolderRow({ folder }) {
     backgroundColor: isOver ? 'rgba(59,130,246,0.1)' : (isSelected ? 'rgba(59,130,246,0.05)' : ''),
   };
 
-  const menuOptions = [
+  const isInMultiSelect = selectedFolders.has(folder.id) &&
+  (selectedBookmarks.size + selectedFolders.size) > 1;
+
+const menuOptions = isInMultiSelect ? [
+  {
+    label: '⧉ Copy',
+    action: () => {
+      const state = useStore.getState();
+      setClipboard('copy', {
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    }
+  },
+  {
+    label: '✂️ Cut',
+    action: () => {
+      const state = useStore.getState();
+      setClipboard('cut', {
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    }
+  },
+  { separator: true },
+  {
+    label: '🗑 Delete',
+    danger: true,
+    action: () => {
+      const state = useStore.getState();
+      requestDeletion({
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    }
+  }
+] : [
     {
       label: '📁 Open',
       action: () => setFilter('folder', folder.id)
@@ -48,27 +84,60 @@ export default function FolderRow({ folder }) {
     },
     { separator: true },
     {
-      label: '🗑 Delete',
-      danger: true,
-      action: async () => {
-        if (!window.confirm(`Delete folder "${folder.name}"?`)) return;
-        try {
-          await api.bulkDeleteItems([], [folder.id]);
-          useStore.setState(state => ({
-            folders: state.folders.filter(f => f.id !== folder.id)
-          }));
-        } catch (err) {
-          alert('Failed to delete: ' + err.message);
-        }
-      }
+  label: '⧉ Copy',
+  action: () => {
+    const state = useStore.getState();
+    if (state.selectedFolders.has(folder.id)) {
+      setClipboard('copy', {
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    } else {
+      setClipboard('copy', { bookmarkIds: [], folderIds: [folder.id] });
     }
+  }
+},
+{
+  label: '✂️ Cut',
+  action: () => {
+    const state = useStore.getState();
+    if (state.selectedFolders.has(folder.id)) {
+      setClipboard('cut', {
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    } else {
+      setClipboard('cut', { bookmarkIds: [], folderIds: [folder.id] });
+    }
+  }
+},
+{ separator: true },
+
+{
+  label: '🗑 Delete',
+  danger: true,
+  action: () => {
+    const state = useStore.getState();
+    if (state.selectedFolders.has(folder.id)) {
+      requestDeletion({
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    } else {
+      requestDeletion({ bookmarkIds: [], folderIds: [folder.id] });
+    }
+  }
+}
   ];
 
-  const handleContextMenu = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, options: menuOptions });
-  };
+const handleContextMenu = (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!selectedFolders.has(folder.id)) {
+    setSelection([], [folder.id]);
+  }
+  setContextMenu({ x: e.clientX, y: e.clientY, options: menuOptions });
+};
 
   const handleMenuButton = (e) => {
     e.stopPropagation();

@@ -4,7 +4,7 @@ import { useStore } from '../store';
 import { api } from '../api';
 
 export default function FolderCard({ folder }) {
-  const { selectedFolders, toggleFolderSelection, setFilter, renameFolder, setContextMenu } = useStore();
+const { selectedFolders, toggleFolderSelection, setFilter, renameFolder, setContextMenu, setSelection } = useStore();
   const isSelected = selectedFolders.has(folder.id);
 
   const { attributes, listeners, setNodeRef: setDraggableRef, isDragging } = useDraggable({
@@ -33,27 +33,58 @@ export default function FolderCard({ folder }) {
     },
     { separator: true },
     {
-      label: '🗑 Delete',
-      danger: true,
-      action: async () => {
-        if (!window.confirm(`Delete folder "${folder.name}"?`)) return;
-        try {
-          await api.bulkDeleteItems([], [folder.id]);
-          useStore.setState(state => ({
-            folders: state.folders.filter(f => f.id !== folder.id)
-          }));
-        } catch (err) {
-          alert('Failed to delete: ' + err.message);
-        }
-      }
+  label: '⧉ Copy',
+  action: () => {
+    const state = useStore.getState();
+    if (state.selectedFolders.has(folder.id)) {
+      setClipboard('copy', {
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    } else {
+      setClipboard('copy', { bookmarkIds: [], folderIds: [folder.id] });
     }
+  }
+},
+{
+  label: '✂️ Cut',
+  action: () => {
+    const state = useStore.getState();
+    if (state.selectedFolders.has(folder.id)) {
+      setClipboard('cut', {
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    } else {
+      setClipboard('cut', { bookmarkIds: [], folderIds: [folder.id] });
+    }
+  }
+},
+{ separator: true },
+    {
+  label: '🗑 Delete',
+  danger: true,
+  action: () => {
+    const state = useStore.getState();
+    if (state.selectedFolders.has(folder.id)) {
+      requestDeletion({
+        bookmarkIds: Array.from(state.selectedBookmarks),
+        folderIds: Array.from(state.selectedFolders)
+      });
+    } else {
+      requestDeletion({ bookmarkIds: [], folderIds: [folder.id] });
+    }
+  }
+}
   ];
-
-  const handleContextMenu = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, options: menuOptions });
-  };
+const handleContextMenu = (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!selectedFolders.has(folder.id)) {
+    setSelection([], [folder.id]);
+  }
+  setContextMenu({ x: e.clientX, y: e.clientY, options: menuOptions });
+};
 
   const handleMenuButton = (e) => {
     e.stopPropagation();
