@@ -183,6 +183,20 @@ bulkImport: (data) => fetch(`${API_URL}/import`, { method: "POST", headers: { "C
                 target_vault: targetVault 
             }),
         }).then(handleResponse),
+getTrash: () => fetch(`${API_URL}/trash`).then(handleResponse),
 
+restoreTrash: (trashIds) =>
+    fetch(`${API_URL}/trash/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trash_ids: trashIds })
+    }).then(handleResponse),
+
+purgeTrash: (trashIds) =>
+    fetch(`${API_URL}/trash/purge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trash_ids: trashIds })
+    }).then(handleResponse),
 
 };

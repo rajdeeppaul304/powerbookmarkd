@@ -10,6 +10,10 @@ DB_PATH     = BASE_DIR / "bookmarks.db"
 ARCHIVE_DIR = BASE_DIR / "archive"
 FAVICON_DIR = BASE_DIR / "favicons"
 
+# TRASH_DIR = BASE_DIR / "trash"
+# TRASH_DIR.mkdir(parents=True, exist_ok=True)
+
+
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 FAVICON_DIR.mkdir(parents=True, exist_ok=True)
@@ -105,6 +109,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS vaults (
             name TEXT PRIMARY KEY
         );
+        CREATE TABLE IF NOT EXISTS deleted_items (
+            id            TEXT PRIMARY KEY,
+            deleted_at    TEXT NOT NULL,
+            data          TEXT NOT NULL
+        );
     """)
 
     # ── Live migrations: add columns if absent ────────────────────────────────
@@ -123,6 +132,9 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO vaults (name) VALUES ('default')")
     c.execute("INSERT OR IGNORE INTO vaults (name) SELECT DISTINCT vault FROM bookmarks")
     c.execute("INSERT OR IGNORE INTO vaults (name) SELECT DISTINCT vault FROM folders")
+
+
+    
 
     conn.commit()
     conn.close()

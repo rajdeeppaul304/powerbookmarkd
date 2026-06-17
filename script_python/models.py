@@ -140,3 +140,11 @@ class BulkCopyItemsRequest(BaseModel):
     folder_ids: list[str]
     target_folder_id: Optional[str] = None
     target_vault: Optional[str] = None
+
+
+
+class TrashRestoreRequest(BaseModel):
+    trash_ids: list[str]
+
+class TrashPurgeRequest(BaseModel):
+    trash_ids: list[str]

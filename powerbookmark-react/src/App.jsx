@@ -22,6 +22,7 @@ import ArchiveViewer from './components/ArchiveViewer';
 import JobWidget from './components/JobWidget';
 import ContextMenu from './components/ContextMenu';
 import DeleteConfirmationModal from './components/DeleteConfirmationModal';
+import Trash from './pages/Trash';
 
 export default function App() {
 const { loadInitialData, isLoading, error, selectedBookmarks, 
@@ -144,6 +145,8 @@ return (
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/importer" element={<Importer />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/trash" element={<Trash />} />
+
               </Routes>
             )}
           </div>

@@ -10,7 +10,10 @@ export default function BulkBar() {
         setMassCopyOpen,
         setMassTaggerOpen,
         requestDeletion, // <--- Swap this in
-        setMassMoveOpen
+        setMassMoveOpen,
+            undoStack, redoStack,
+    undo, redo
+
     } = useStore();
 
     const bmCount = selectedBookmarks.size;
@@ -38,6 +41,22 @@ export default function BulkBar() {
             >
                 ⧉ Copy
             </button>
+
+<button
+    className="bulk-btn"
+    style={{ opacity: undoStack.length ? 1 : 0.4, pointerEvents: undoStack.length ? 'auto' : 'none' }}
+    onClick={undo}
+>
+    ↩ Undo
+</button>
+
+<button
+    className="bulk-btn"
+    style={{ opacity: redoStack.length ? 1 : 0.4, pointerEvents: redoStack.length ? 'auto' : 'none' }}
+    onClick={redo}
+>
+    ↪ Redo
+</button>
 
             <button
                 className="bulk-btn"

@@ -15,6 +15,9 @@ export const useStore = create((set, get) => ({
 
     jobs: [],
 
+    undoStack: [],
+    redoStack: [],
+
     // View & Filter State
     currentFilter: { type: 'all', value: null }, // type: 'all' | 'vault' | 'folder' | 'tag' | 'archived' | 'screenshot'
     viewMode: 'grid', // 'grid' | 'list'
@@ -213,30 +216,7 @@ export const useStore = create((set, get) => ({
     }),
 
     moveItemsToFolder: async (bookmarkIds, folderIds, targetFolderId) => {
-        // 1. Optimistic UI Update: Instantly update BOTH bookmarks and folders
-        set(state => ({
-            bookmarks: state.bookmarks.map(bm =>
-                bookmarkIds.includes(bm.id) ? { ...bm, folder_id: targetFolderId } : bm
-            ),
-            folders: state.folders.map(f =>
-                folderIds.includes(f.id) ? { ...f, parent_id: targetFolderId } : f
-            ),
-            // Automatically clear all selections after a successful move
-            selectedBookmarks: new Set(),
-            selectedFolders: new Set()
-        }));
-
-        // 2. Background Server Sync (Fire both APIs simultaneously if needed)
-        try {
-            const promises = [];
-            if (bookmarkIds.length > 0) promises.push(api.moveBookmarks(bookmarkIds, targetFolderId));
-            if (folderIds.length > 0) promises.push(api.moveFolders(folderIds, targetFolderId));
-
-            await Promise.all(promises);
-        } catch (err) {
-            alert("Failed to move items: " + err.message);
-            // In a production app, you'd re-fetch the folders/bookmarks here to revert the UI on failure
-        }
+        await get()._executeMove(bookmarkIds, folderIds, targetFolderId);
     },
 
     // Universal Reorder (Handles Folders & Bookmarks interleaved)
@@ -404,16 +384,21 @@ export const useStore = create((set, get) => ({
         const newName = window.prompt("Rename folder to:", oldName);
         if (!newName || newName.trim() === "" || newName === oldName) return;
 
-        // Optimistic UI update
         set(state => ({
             folders: state.folders.map(f => f.id === id ? { ...f, name: newName.trim() } : f)
         }));
 
         try {
             await api.renameFolder(id, newName.trim());
+            get()._pushUndo({
+                type: 'rename',
+                folderId: id,
+                oldName,
+                newName: newName.trim()
+            });
         } catch (err) {
             alert("Failed to rename folder: " + err.message);
-            get().loadInitialData(); // Revert on failure
+            get().loadInitialData();
         }
     },
 
@@ -443,7 +428,7 @@ export const useStore = create((set, get) => ({
             console.error("Failed to fetch jobs");
         }
     },
-    
+
     controlJob: async (jobId, action) => {
         try {
             await api.controlJob(jobId, action);
@@ -452,9 +437,9 @@ export const useStore = create((set, get) => ({
             alert("Action failed: " + err.message);
         }
     },
-setContextMenu: (menuData) => set({ contextMenu: menuData }),
+    setContextMenu: (menuData) => set({ contextMenu: menuData }),
 
-// --- Delete Actions ---
+    // --- Delete Actions ---
     setSkipDeleteConfirmation: (skip) => {
         localStorage.setItem('pb_skip_delete_confirm', skip);
         set({ skipDeleteConfirmation: skip });
@@ -483,33 +468,102 @@ setContextMenu: (menuData) => set({ contextMenu: menuData }),
 
     // The Engine: Handles the actual API call and UI optimistic updates
     _executeDeletion: async ({ bookmarkIds = [], folderIds = [] }) => {
-    if (bookmarkIds.length === 0 && folderIds.length === 0) return;
+        if (bookmarkIds.length === 0 && folderIds.length === 0) return;
 
-    try {
-        const result = await api.bulkDeleteItems(bookmarkIds, folderIds);
-        
-        const deletedBIds = new Set(result.deleted_bookmark_ids);
-        const deletedFIds = new Set(result.deleted_folder_ids);
+        try {
+            const result = await api.bulkDeleteItems(bookmarkIds, folderIds);
 
-        set(state => ({
-            bookmarks: state.bookmarks.filter(b => !deletedBIds.has(b.id)),
-            folders: state.folders.filter(f => !deletedFIds.has(f.id)),
-            selectedBookmarks: new Set(),
-            selectedFolders: new Set()
-        }));
-    } catch (err) {
-        alert("Failed to delete items: " + err.message);
-    }
+            const deletedBIds = new Set(result.deleted_bookmark_ids);
+            const deletedFIds = new Set(result.deleted_folder_ids);
+
+            set(state => ({
+                bookmarks: state.bookmarks.filter(b => !deletedBIds.has(b.id)),
+                folders: state.folders.filter(f => !deletedFIds.has(f.id)),
+                selectedBookmarks: new Set(),
+                selectedFolders: new Set()
+            }));
+
+            // Push to undo stack after confirmed success
+            get()._pushUndo({
+                type: 'delete',
+                trashId: result.trash_id,
+                deletedBookmarkIds: result.deleted_bookmark_ids,
+                deletedFolderIds: result.deleted_folder_ids,
+            });
+
+        } catch (err) {
+            alert("Failed to delete items: " + err.message);
+        }
     },
 
 
     // --- Clipboard State ---
     // Format: { action: 'copy' | 'cut', payload: { bookmarkIds: [], folderIds: [] } }
-    clipboard: null, 
+    clipboard: null,
 
     // --- Clipboard Actions ---
     setClipboard: (action, payload) => set({ clipboard: { action, payload } }),
     clearClipboard: () => set({ clipboard: null }),
+
+
+_executeMove: async (bookmarkIds, folderIds, targetFolderId) => {
+    const state = get();
+
+    // --- CLIENT-SIDE CYCLE GUARD ---
+    // Check if targetFolderId is the same as, or a descendant of, any folder being moved.
+    // If so, reject BEFORE applying any optimistic update — otherwise we create
+    // a cycle in the in-memory folders array that can freeze the whole app
+    // (e.g. any code that walks parent_id chains, like breadcrumbs).
+    const isDescendant = (candidateId, ancestorId) => {
+        let current = candidateId;
+        const seen = new Set();
+        while (current) {
+            if (current === ancestorId) return true;
+            if (seen.has(current)) return false; // safety, shouldn't happen on clean data
+            seen.add(current);
+            const f = state.folders.find(f => f.id === current);
+            current = f?.parent_id ?? null;
+        }
+        return false;
+    };
+
+    if (targetFolderId !== null) {
+        for (const fid of folderIds) {
+            if (targetFolderId === fid || isDescendant(targetFolderId, fid)) {
+                alert("Cannot move a folder into itself or one of its descendants");
+                return;
+            }
+        }
+    }
+
+        const originalFolderId = state.bookmarks.find(b => b.id === bookmarkIds[0])?.folder_id ??
+            state.folders.find(f => f.id === folderIds[0])?.parent_id ?? null;
+
+        set(state => ({
+            bookmarks: state.bookmarks.map(b =>
+                bookmarkIds.includes(b.id) ? { ...b, folder_id: targetFolderId } : b
+            ),
+            folders: state.folders.map(f =>
+                folderIds.includes(f.id) ? { ...f, parent_id: targetFolderId } : f
+            ),
+            selectedBookmarks: new Set(),
+            selectedFolders: new Set()
+        }));
+
+        try {
+            await api.bulkMoveItems(bookmarkIds, folderIds, targetFolderId);
+            get()._pushUndo({
+                type: 'move',
+                bookmarkIds,
+                folderIds,
+                originalFolderId,
+                targetFolderId
+            });
+        } catch (err) {
+            alert("Failed to move items: " + err.message);
+            get().loadInitialData();
+        }
+    },
 
 
     // --- Paste Execution ---
@@ -528,27 +582,8 @@ setContextMenu: (menuData) => set({ contextMenu: menuData }),
         // CUT (MOVE) LOGIC
         // ==========================================
         if (action === 'cut') {
-            // 1. Optimistic UI (Instant Snap)
-            set({
-                bookmarks: state.bookmarks.map(b =>
-                    bookmarkIds.includes(b.id) ? { ...b, folder_id: targetFolderId } : b
-                ),
-                folders: state.folders.map(f =>
-                    folderIds.includes(f.id) ? { ...f, parent_id: targetFolderId } : f
-                ),
-                clipboard: null, // Clear clipboard after a cut/move!
-                selectedBookmarks: new Set(),
-                selectedFolders: new Set()
-            });
-
-            // 2. Background Sync
-            try {
-                // We will build this unified endpoint in Python next!
-                await api.bulkMoveItems(bookmarkIds, folderIds, targetFolderId);
-            } catch (err) {
-                alert("Failed to move items: " + err.message);
-                get().loadInitialData(); // Rollback on failure
-            }
+            set({ clipboard: null });
+            await get()._executeMove(bookmarkIds, folderIds, targetFolderId);
         }
 
         // ==========================================
@@ -556,24 +591,174 @@ setContextMenu: (menuData) => set({ contextMenu: menuData }),
         // ==========================================
         if (action === 'copy') {
             try {
-                // We will build this unified recursive endpoint in Python next!
                 const res = await api.bulkCopyItems(bookmarkIds, folderIds, targetFolderId, activeVault);
 
-                // Inject the newly cloned items returned by the server into the UI
                 set(state => ({
                     bookmarks: [...state.bookmarks, ...(res.new_bookmarks || [])],
                     folders: [...state.folders, ...(res.new_folders || [])],
                     selectedBookmarks: new Set(),
                     selectedFolders: new Set()
                 }));
-                
-                // NOTE: We do NOT set clipboard to null here. 
-                // Users expect to hit Ctrl+V multiple times to paste multiple copies!
+
+                // Push after success
+                get()._pushUndo({
+                    type: 'copy',
+                    copiedBookmarkIds: (res.new_bookmarks || []).map(b => b.id),
+                    copiedFolderIds: (res.new_folders || []).map(f => f.id),
+                });
+
             } catch (err) {
                 alert("Failed to copy items: " + err.message);
             }
         }
     },
 
+    _loadUndoStack: () => {
+        try {
+            const saved = sessionStorage.getItem('pb_undo_stack');
+            if (saved) set({ undoStack: JSON.parse(saved) });
+        } catch { }
+    },
+
+    _pushUndo: (entry) => {
+        const stack = [...get().undoStack, entry].slice(-30);
+        sessionStorage.setItem('pb_undo_stack', JSON.stringify(stack));
+        set({ undoStack: stack, redoStack: [] });
+    },
+
+    undo: async () => {
+        const stack = [...get().undoStack];
+        if (!stack.length) return;
+
+        const entry = stack.pop();
+        sessionStorage.setItem('pb_undo_stack', JSON.stringify(stack));
+        set({ undoStack: stack });
+
+        try {
+            if (entry.type === 'delete') {
+                await api.restoreTrash([entry.trashId]);
+                // Let silentSync pick up the restored items naturally
+                // since we don't have the full bookmark/folder objects in the undo entry
+                await get().silentSync();
+            }
+            if (entry.type === 'move') {
+                await api.bulkMoveItems(
+                    entry.bookmarkIds,
+                    entry.folderIds,
+                    entry.originalFolderId
+                );
+                set(state => ({
+                    bookmarks: state.bookmarks.map(b =>
+                        entry.bookmarkIds.includes(b.id)
+                            ? { ...b, folder_id: entry.originalFolderId }
+                            : b
+                    ),
+                    folders: state.folders.map(f =>
+                        entry.folderIds.includes(f.id)
+                            ? { ...f, parent_id: entry.originalFolderId }
+                            : f
+                    )
+                }));
+            }
+
+            if (entry.type === 'copy') {
+                const result = await api.bulkDeleteItems(
+                    entry.copiedBookmarkIds,
+                    entry.copiedFolderIds
+                );
+                set(state => ({
+                    bookmarks: state.bookmarks.filter(b => !entry.copiedBookmarkIds.includes(b.id)),
+                    folders: state.folders.filter(f => !entry.copiedFolderIds.includes(f.id)),
+                }));
+                // Store trash_id for redo
+                entry.trashId = result.trash_id;
+            }
+
+            if (entry.type === 'rename') {
+                await api.renameFolder(entry.folderId, entry.oldName);
+                set(state => ({
+                    folders: state.folders.map(f =>
+                        f.id === entry.folderId ? { ...f, name: entry.oldName } : f
+                    )
+                }));
+            }
+
+            // push to redo stack after success
+            const redoStack = [...get().redoStack, entry].slice(-30);
+            sessionStorage.setItem('pb_redo_stack', JSON.stringify(redoStack));
+            set({ redoStack });
+
+        } catch (err) {
+            alert("Couldn't undo: " + err.message);
+        }
+    },
+
+    redo: async () => {
+        const redoStack = [...get().redoStack];
+        if (!redoStack.length) return;
+
+        const entry = redoStack.pop();
+        sessionStorage.setItem('pb_redo_stack', JSON.stringify(redoStack));
+        set({ redoStack });
+
+        try {
+            if (entry.type === 'delete') {
+                const result = await api.bulkDeleteItems(
+                    entry.deletedBookmarkIds,
+                    entry.deletedFolderIds
+                );
+                // Update trash_id since redo creates a new trash entry
+                entry.trashId = result.trash_id;
+
+                set(state => ({
+                    bookmarks: state.bookmarks.filter(b => !entry.deletedBookmarkIds.includes(b.id)),
+                    folders: state.folders.filter(f => !entry.deletedFolderIds.includes(f.id)),
+                }));
+            }
+
+
+            if (entry.type === 'move') {
+                await api.bulkMoveItems(
+                    entry.bookmarkIds,
+                    entry.folderIds,
+                    entry.targetFolderId
+                );
+                set(state => ({
+                    bookmarks: state.bookmarks.map(b =>
+                        entry.bookmarkIds.includes(b.id)
+                            ? { ...b, folder_id: entry.targetFolderId }
+                            : b
+                    ),
+                    folders: state.folders.map(f =>
+                        entry.folderIds.includes(f.id)
+                            ? { ...f, parent_id: entry.targetFolderId }
+                            : f
+                    )
+                }));
+            }
+
+            if (entry.type === 'copy') {
+                await api.restoreTrash([entry.trashId]);
+                await get().silentSync();
+            }
+
+            if (entry.type === 'rename') {
+                await api.renameFolder(entry.folderId, entry.newName);
+                set(state => ({
+                    folders: state.folders.map(f =>
+                        f.id === entry.folderId ? { ...f, name: entry.newName } : f
+                    )
+                }));
+            }
+
+            // push back to undo stack after successful redo
+            const undoStack = [...get().undoStack, entry].slice(-30);
+            set({ undoStack });
+            sessionStorage.setItem('pb_undo_stack', JSON.stringify(undoStack));
+
+        } catch (err) {
+            alert("Couldn't redo: " + err.message);
+        }
+    },
 
 }));

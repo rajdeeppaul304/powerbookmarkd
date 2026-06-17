@@ -7,6 +7,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from state import broadcast_sync
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -142,6 +143,7 @@ def save(req: SaveRequest):
             )
 
     conn.commit()
+    broadcast_sync({"type": "bookmarks_changed"})
     conn.close()
     return {"id": bid, "status": action}
 
@@ -182,6 +184,7 @@ def delete_bookmark(bid: str):
     conn.execute("DELETE FROM item_order WHERE item_id=? AND item_type='bookmark'", (bid,))
     conn.execute("DELETE FROM bookmarks WHERE id=?", (bid,))
     conn.commit()
+    broadcast_sync({"type": "bookmarks_changed"})
     conn.close()
     return {"status": "deleted"}
 
@@ -199,6 +202,7 @@ def move_bookmark(bid: str, req: BookmarkMove):
     conn.execute("UPDATE bookmarks SET folder_id=? WHERE id=?", (req.folder_id, bid))
     move_order_row(conn, req.folder_id, bid, "bookmark")
     conn.commit()
+    broadcast_sync({"type": "bookmarks_changed"})
     updated = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
     d = enrich_bookmark(conn, updated)
     conn.close()
@@ -219,6 +223,7 @@ def patch_tags(bid: str, req: BookmarkTagPatch):
             "INSERT OR IGNORE INTO tags (bookmark_id, tag) VALUES (?,?)", (bid, tag)
         )
     conn.commit()
+    broadcast_sync({"type": "bookmarks_changed"})
     updated = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
     d = enrich_bookmark(conn, updated)
     conn.close()
@@ -234,6 +239,7 @@ def patch_notes(bid: str, req: BookmarkNotesPatch):
         raise HTTPException(404, "Bookmark not found")
     conn.execute("UPDATE bookmarks SET notes=? WHERE id=?", (req.notes, bid))
     conn.commit()
+    broadcast_sync({"type": "bookmarks_changed"})
     updated = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
     d = enrich_bookmark(conn, updated)
     conn.close()
@@ -259,6 +265,7 @@ def update_bookmark(bid: str, req: BookmarkUpdate):
                 "INSERT OR IGNORE INTO tags (bookmark_id, tag) VALUES (?,?)", (bid, clean)
             )
     conn.commit()
+    broadcast_sync({"type": "bookmarks_changed"})
     updated = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
     d = enrich_bookmark(conn, updated)
     conn.close()
