@@ -5,10 +5,12 @@ import { CSS } from '@dnd-kit/utilities';
 import { useStore } from '../store';
 import { hostOf } from '../utils';
 import { API_URL, api } from '../api';
+import { SelectionContext } from './MainArea';
+import { useContext } from 'react';
 
 export default function BookmarkRow({ bm }) {
   const {
-    selectedBookmarks, toggleBookmarkSelection, setDetailBookmark, selectedFolders,
+    selectedBookmarks, setDetailBookmark, selectedFolders,
     setArchiveViewBookmark, setFilter, setContextMenu,
     setTargetFetchIds, setBulkFetchOpen,
     requestDeletion, // <--- Add the new delete funnel
@@ -184,13 +186,14 @@ export default function BookmarkRow({ bm }) {
     const rect = e.currentTarget.getBoundingClientRect();
     setContextMenu({ x: rect.right, y: rect.bottom, options: menuOptions });
   };
+const { onItemClick } = useContext(SelectionContext);
 
   return (
     <div
       ref={setSortRef}
       style={style}
       className="bookmark-row"
-      onClick={() => toggleBookmarkSelection(bm.id)}
+      onClick={(e) => onItemClick(bm.id, e)}
       onDoubleClick={() => setDetailBookmark(bm)}
       onContextMenu={handleContextMenu}
     >

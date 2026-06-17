@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect, useState } from 'react';
+import React, { useMemo, useEffect, useState, useRef, createContext, useContext } from 'react';
 import { useStore } from '../store';
 import BookmarkCard from './BookmarkCard';
 import BookmarkRow from './BookmarkRow'; 
@@ -9,6 +9,7 @@ import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { api } from '../api';
 
+export const SelectionContext = createContext(null);
 
 // Mini component for our interactive breadcrumbs
 function DroppableCrumb({ folderId, name, isLast }) {
@@ -46,7 +47,43 @@ export default function MainArea() {
         clipboard, executePaste // <--- ADDED THESE TWO
     } = useStore();
 
+    const anchorIdRef = useRef(null);
+// Reset anchor on navigation
+useEffect(() => {
+  anchorIdRef.current = null;
+}, [currentFilter.value, currentFilter.type]);
 
+
+
+
+// The handler all four components will consume
+const handleItemClick = (id, e) => {
+  if (e.shiftKey && anchorIdRef.current && anchorIdRef.current !== id) {
+    const ids = visibleItems.map(i => i.id);
+    const anchorIdx = ids.indexOf(anchorIdRef.current);
+    const clickIdx = ids.indexOf(id);
+    if (anchorIdx === -1 || clickIdx === -1) return;
+
+    const [start, end] = anchorIdx < clickIdx
+      ? [anchorIdx, clickIdx]
+      : [clickIdx, anchorIdx];
+
+    const range = visibleItems.slice(start, end + 1);
+    setSelection(
+      range.filter(i => !('parent_id' in i)).map(i => i.id),
+      range.filter(i => 'parent_id' in i).map(i => i.id)
+    );
+    // anchor stays at first click, don't update it
+  } else {
+    anchorIdRef.current = id;
+    const isFolder = 'parent_id' in (visibleItems.find(i => i.id === id) ?? {});
+    if (isFolder) {
+      useStore.getState().toggleFolderSelection(id);
+    } else {
+      useStore.getState().toggleBookmarkSelection(id);
+    }
+  }
+};
     // Instantly fetch the correct DB order for this specific view!
     useEffect(() => {
         if (currentFilter.type === 'folder' || currentFilter.type === 'root' || currentFilter.type === 'vault') {
@@ -154,6 +191,13 @@ export default function MainArea() {
         return items.sort((a, b) => (a.position ?? 999999) - (b.position ?? 999999));
     }, [filteredFolders, filteredBookmarks]);
 
+
+    const visibleItems = useMemo(() => {
+  return viewMode === 'list'
+    ? interleavedItems
+    : [...filteredFolders, ...filteredBookmarks];
+}, [viewMode, interleavedItems, filteredFolders, filteredBookmarks]);
+
     const getHeaderTitle = () => {
         if (currentFilter.type === 'archived') return 'Archived';
         if (currentFilter.type === 'screenshot') return 'With Screenshot';
@@ -205,6 +249,8 @@ export default function MainArea() {
         filteredFolders.every(f => selectedFolders.has(f.id));
 
     return (
+          <SelectionContext.Provider value={{ onItemClick: handleItemClick }}>
+
         <main className="main" 
         onContextMenu={handleBackgroundContextMenu}
         style={{ minHeight: '100%', paddingBottom: '100px' }} 
@@ -279,5 +325,7 @@ export default function MainArea() {
                 )}
             </div>
         </main>
+          </SelectionContext.Provider>
+
     );
 }

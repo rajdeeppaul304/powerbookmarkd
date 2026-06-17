@@ -3,6 +3,8 @@ import { useDraggable } from '@dnd-kit/core';
 import { useStore } from '../store';
 import { hostOf } from '../utils';
 import { API_URL, api } from '../api';
+import { SelectionContext } from './MainArea';
+import { useContext } from 'react';
 
 export default function BookmarkCard({ bm }) {
   const {
@@ -19,6 +21,7 @@ export default function BookmarkCard({ bm }) {
   setClipboard,       // ADD
 
   } = useStore();
+const { onItemClick } = useContext(SelectionContext);
 
   const isSelected = selectedBookmarks.has(bm.id);
 
@@ -116,9 +119,9 @@ const handleContextMenu = (e) => {
   };
 
   const handleSingleClick = (e) => {
-    if (e.target.closest('.card-action-btn')) return;
-    toggleBookmarkSelection(bm.id);
-  };
+  if (e.target.closest('.card-action-btn')) return;
+  onItemClick(bm.id, e);
+};
 
   const handleDoubleClick = (e) => {
     if (e.target.closest('.card-action-btn')) return;

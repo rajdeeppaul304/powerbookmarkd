@@ -2,10 +2,13 @@
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { useStore } from '../store';
 import { api } from '../api';
+import { SelectionContext } from './MainArea';
+import { useContext } from 'react';
 
 export default function FolderCard({ folder }) {
-const { selectedFolders, toggleFolderSelection, setFilter, renameFolder, setContextMenu, setSelection } = useStore();
+const { selectedFolders, setFilter, renameFolder, setContextMenu, setSelection } = useStore();
   const isSelected = selectedFolders.has(folder.id);
+const { onItemClick } = useContext(SelectionContext);
 
   const { attributes, listeners, setNodeRef: setDraggableRef, isDragging } = useDraggable({
     id: `drag-folder-${folder.id}`,
@@ -98,7 +101,7 @@ const handleContextMenu = (e) => {
       {...listeners}
       {...attributes}
       className="bookmark-card folder-card"
-      onClick={() => toggleFolderSelection(folder.id)}
+onClick={(e) => onItemClick(folder.id, e)}
       onDoubleClick={() => setFilter('folder', folder.id)}
       onContextMenu={handleContextMenu}
       style={{

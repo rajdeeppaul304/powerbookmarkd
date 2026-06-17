@@ -4,10 +4,13 @@ import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { useStore } from '../store';
 import { api } from '../api';
+import { SelectionContext } from './MainArea';
+import { useContext } from 'react';
 
 export default function FolderRow({ folder }) {
-const { selectedFolders, toggleFolderSelection, setFilter, renameFolder, setContextMenu, setSelection, selectedBookmarks } = useStore();
+const { selectedFolders, setFilter, renameFolder, setContextMenu, setSelection, selectedBookmarks } = useStore();
   const isSelected = selectedFolders.has(folder.id);
+const { onItemClick } = useContext(SelectionContext);
 
   const { setNodeRef: setSortRef, setActivatorNodeRef, listeners: sortListeners, attributes: sortAttrs, transform, transition, isDragging: isSorting } = useSortable({
     id: folder.id,
@@ -150,7 +153,7 @@ const handleContextMenu = (e) => {
       ref={setSortRef}
       style={style}
       className="bookmark-row"
-      onClick={() => toggleFolderSelection(folder.id)}
+onClick={(e) => onItemClick(folder.id, e)}
       onDoubleClick={() => setFilter('folder', folder.id)}
       onContextMenu={handleContextMenu}
     >
