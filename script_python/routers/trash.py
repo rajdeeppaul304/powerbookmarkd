@@ -13,7 +13,7 @@ from database import get_db
 from models import TrashRestoreRequest, TrashPurgeRequest
 from ordering import ensure_order_row
 from utils import descendant_folder_ids
-
+from state import broadcast_sync
 router = APIRouter()
 
 
@@ -126,6 +126,9 @@ def restore_trash(req: TrashRestoreRequest):
         conn.execute("DELETE FROM deleted_items WHERE id=?", (trash_id,))
 
     conn.commit()
+    broadcast_sync({"type": "bookmarks_changed"})
+    broadcast_sync({"type": "folders_changed"})
+    broadcast_sync({"type": "trash_changed"})
     conn.close()
     return {"status": "restored"}
 
@@ -152,6 +155,7 @@ def purge_trash(req: TrashPurgeRequest):
         conn.execute("DELETE FROM deleted_items WHERE id=?", (trash_id,))
 
     conn.commit()
+    broadcast_sync({"type": "trash_changed"})
     conn.close()
     return {"status": "purged"}
 
@@ -176,5 +180,6 @@ def purge_expired():
 
     conn.execute("DELETE FROM deleted_items WHERE deleted_at < ?", (cutoff,))
     conn.commit()
+    broadcast_sync({"type": "trash_changed"})
     conn.close()
     return {"status": "ok"}

@@ -1,8 +1,15 @@
 // src/store.js
 import { create } from 'zustand';
-import { api } from './api';
+import { api, WS_URL } from './api';
 import { arrayMove } from '@dnd-kit/sortable';
 export const useStore = create((set, get) => ({
+
+
+    ws: null,
+    wsReconnectAttempt: 0,
+
+
+
     // --- State ---
     bookmarks: [],
     vaults: [],
@@ -17,7 +24,7 @@ export const useStore = create((set, get) => ({
 
     undoStack: [],
     redoStack: [],
-
+    expandedFolderIds: new Set(),
     // View & Filter State
     currentFilter: { type: 'all', value: null }, // type: 'all' | 'vault' | 'folder' | 'tag' | 'archived' | 'screenshot'
     viewMode: 'grid', // 'grid' | 'list'
@@ -61,6 +68,44 @@ export const useStore = create((set, get) => ({
     sidebarTagsView: localStorage.getItem("pb_sidebar_tags") === "true",
 
     // --- Actions ---
+
+    connectWebSocket: () => {
+        const connect = () => {
+            const ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                set({ ws, wsReconnectAttempt: 0 });
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'bookmarks_changed' || msg.type === 'folders_changed' || msg.type === 'vaults_changed') {
+                        get().silentSync();
+                    }
+                    if (msg.type === 'jobs_changed') {
+                        get().fetchJobsStatus();
+                    }
+                    // trash_changed is handled separately by the Trash page itself if mounted
+                } catch (err) {
+                    console.warn("WS message parse failed:", err);
+                }
+            };
+
+            ws.onclose = () => {
+                const attempt = get().wsReconnectAttempt;
+                const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+                set({ ws: null, wsReconnectAttempt: attempt + 1 });
+                setTimeout(connect, delay);
+            };
+
+            ws.onerror = () => {
+                ws.close();
+            };
+        };
+
+        connect();
+    },
 
     // Boot up the dashboard
     loadInitialData: async () => {
@@ -165,24 +210,36 @@ export const useStore = create((set, get) => ({
 
     // Filter & View Actions
     setFilter: (type, value = null) => set(state => {
-        let newVault = state.activeVault;
+    let newVault = state.activeVault;
 
-        // If we click a specific vault or folder, update our active memory
-        if (type === 'vault') newVault = value;
-        else if (type === 'folder') {
-            const f = state.folders.find(fol => fol.id === value);
-            if (f) newVault = f.vault;
+    if (type === 'vault') newVault = value;
+    else if (type === 'folder') {
+        const f = state.folders.find(fol => fol.id === value);
+        if (f) newVault = f.vault;
+    }
+
+    // Expand the ancestor chain when navigating into a folder
+    let newExpandedFolderIds = state.expandedFolderIds;
+    if (type === 'folder' && value) {
+        const next = new Set(state.expandedFolderIds);
+        let currentId = value;
+        while (currentId) {
+            next.add(currentId);
+            const f = state.folders.find(fol => fol.id === currentId);
+            currentId = f?.parent_id ?? null;
         }
+        newExpandedFolderIds = next;
+    }
 
-        // If we click 'root', newVault safely stays exactly what it was!
-        return {
-            currentFilter: { type, value },
-            searchQuery: '',
-            selectedBookmarks: new Set(),
-            selectedFolders: new Set(),
-            activeVault: newVault
-        };
-    }),
+    return {
+        currentFilter: { type, value },
+        searchQuery: '',
+        selectedBookmarks: new Set(),
+        selectedFolders: new Set(),
+        activeVault: newVault,
+        expandedFolderIds: newExpandedFolderIds
+    };
+}),
     setSearchQuery: (query) => set({ searchQuery: query }),
     setViewMode: (mode) => set({ viewMode: mode }),
     setSortMode: (mode) => set({ sortMode: mode }),
@@ -506,35 +563,35 @@ export const useStore = create((set, get) => ({
     clearClipboard: () => set({ clipboard: null }),
 
 
-_executeMove: async (bookmarkIds, folderIds, targetFolderId) => {
-    const state = get();
+    _executeMove: async (bookmarkIds, folderIds, targetFolderId) => {
+        const state = get();
 
-    // --- CLIENT-SIDE CYCLE GUARD ---
-    // Check if targetFolderId is the same as, or a descendant of, any folder being moved.
-    // If so, reject BEFORE applying any optimistic update — otherwise we create
-    // a cycle in the in-memory folders array that can freeze the whole app
-    // (e.g. any code that walks parent_id chains, like breadcrumbs).
-    const isDescendant = (candidateId, ancestorId) => {
-        let current = candidateId;
-        const seen = new Set();
-        while (current) {
-            if (current === ancestorId) return true;
-            if (seen.has(current)) return false; // safety, shouldn't happen on clean data
-            seen.add(current);
-            const f = state.folders.find(f => f.id === current);
-            current = f?.parent_id ?? null;
-        }
-        return false;
-    };
+        // --- CLIENT-SIDE CYCLE GUARD ---
+        // Check if targetFolderId is the same as, or a descendant of, any folder being moved.
+        // If so, reject BEFORE applying any optimistic update — otherwise we create
+        // a cycle in the in-memory folders array that can freeze the whole app
+        // (e.g. any code that walks parent_id chains, like breadcrumbs).
+        const isDescendant = (candidateId, ancestorId) => {
+            let current = candidateId;
+            const seen = new Set();
+            while (current) {
+                if (current === ancestorId) return true;
+                if (seen.has(current)) return false; // safety, shouldn't happen on clean data
+                seen.add(current);
+                const f = state.folders.find(f => f.id === current);
+                current = f?.parent_id ?? null;
+            }
+            return false;
+        };
 
-    if (targetFolderId !== null) {
-        for (const fid of folderIds) {
-            if (targetFolderId === fid || isDescendant(targetFolderId, fid)) {
-                alert("Cannot move a folder into itself or one of its descendants");
-                return;
+        if (targetFolderId !== null) {
+            for (const fid of folderIds) {
+                if (targetFolderId === fid || isDescendant(targetFolderId, fid)) {
+                    alert("Cannot move a folder into itself or one of its descendants");
+                    return;
+                }
             }
         }
-    }
 
         const originalFolderId = state.bookmarks.find(b => b.id === bookmarkIds[0])?.folder_id ??
             state.folders.find(f => f.id === folderIds[0])?.parent_id ?? null;
@@ -592,7 +649,7 @@ _executeMove: async (bookmarkIds, folderIds, targetFolderId) => {
         if (action === 'copy') {
             try {
                 const res = await api.bulkCopyItems(bookmarkIds, folderIds, targetFolderId, activeVault);
-
+                
                 set(state => ({
                     bookmarks: [...state.bookmarks, ...(res.new_bookmarks || [])],
                     folders: [...state.folders, ...(res.new_folders || [])],
@@ -600,7 +657,10 @@ _executeMove: async (bookmarkIds, folderIds, targetFolderId) => {
                     selectedFolders: new Set()
                 }));
 
-                // Push after success
+                await api.getOrder(targetFolderId).then(data => {
+                    get().applyOrder(data.items);
+                }).catch(() => {});
+
                 get()._pushUndo({
                     type: 'copy',
                     copiedBookmarkIds: (res.new_bookmarks || []).map(b => b.id),
@@ -760,5 +820,24 @@ _executeMove: async (bookmarkIds, folderIds, targetFolderId) => {
             alert("Couldn't redo: " + err.message);
         }
     },
+    expandFolderChain: (folderId) => set(state => {
+    const next = new Set(state.expandedFolderIds);
+    let currentId = folderId;
+    while (currentId) {
+        next.add(currentId);
+        const f = state.folders.find(fol => fol.id === currentId);
+        currentId = f?.parent_id ?? null;
+    }
+    return { expandedFolderIds: next };
+}),
+
+toggleFolderExpanded: (folderId) => set(state => {
+    const next = new Set(state.expandedFolderIds);
+    if (next.has(folderId)) next.delete(folderId);
+    else next.add(folderId);
+    return { expandedFolderIds: next };
+}),
+
+
 
 }));

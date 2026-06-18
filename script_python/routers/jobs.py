@@ -19,7 +19,7 @@ from playwright.async_api import async_playwright
 from database import get_db, ARCHIVE_DIR, FAVICON_DIR
 from models import FetchRequest, JobControl
 from services.playwright import fetch_page
-from state import ACTIVE_JOBS
+from state import ACTIVE_JOBS, manager, broadcast_sync
 
 router = APIRouter()
 
@@ -87,6 +87,7 @@ async def fetch_worker(
                         bid,
                     ))
                     conn.commit()
+                    await manager.broadcast({"type": "bookmarks_changed"})
 
                     # Check for partial failures (e.g. single-file failed, but screenshot worked)
                     if result.errors and job_id in ACTIVE_JOBS:
@@ -115,6 +116,8 @@ async def fetch_worker(
 
                 if job_id in ACTIVE_JOBS:
                     ACTIVE_JOBS[job_id]["current"] += 1
+                    await manager.broadcast({"type": "jobs_changed"})
+
 
             await browser.close()
 
@@ -170,5 +173,5 @@ def control_job(job_id: str, req: JobControl):
         ACTIVE_JOBS[job_id]["status"] = "running"
     elif req.action == "cancel":
         ACTIVE_JOBS[job_id]["status"] = "canceled"
-
+    broadcast_sync({"type": "jobs_changed"})
     return {"status": "success"}

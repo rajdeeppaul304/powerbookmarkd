@@ -25,7 +25,7 @@ import DeleteConfirmationModal from './components/DeleteConfirmationModal';
 import Trash from './pages/Trash';
 
 export default function App() {
-const { loadInitialData, isLoading, error, contextMenu, setContextMenu, clearSelection } = useStore();
+  const { loadInitialData, isLoading, error, contextMenu, setContextMenu, clearSelection } = useStore();
 
 
   const [activeDragId, setActiveDragId] = useState(null);
@@ -36,46 +36,31 @@ const { loadInitialData, isLoading, error, contextMenu, setContextMenu, clearSel
   useEffect(() => {
     // 1. Initial boot-up (shows the loading screen)
     loadInitialData();
+    useStore.getState().connectWebSocket();
 
-    // 2. Start the silent walkie-talkie heartbeat
-    const syncInterval = setInterval(() => {
-      // ONLY sync if the user is actually looking at the tab!
-      if (!document.hidden) {
-        useStore.getState().silentSync();
-      }
-    }, 3000);
-
-    // The Job Pager (Every 1s for smooth progress bars)
-    const jobInterval = setInterval(() => {
-      if (!document.hidden) useStore.getState().fetchJobsStatus();
-    }, 1000);
-
-
-
-    // 3. Clean up the timer if the app ever unmounts
     return () => {
-        clearInterval(syncInterval);
-        clearInterval(jobInterval);
+      const ws = useStore.getState().ws;
+      if (ws) ws.close();
     };
   }, [loadInitialData]);
 
   // CHANGE 2: Add this useEffect after the existing ones
-useEffect(() => {
-  const handleMouseDown = (e) => {
-    // Close context menu if clicking outside it
-    if (contextMenu && !e.target.closest('.ctx-menu')) {
-      setContextMenu(null);
-    }
-    // Deselect if clicking on empty space
-    if (!e.target.closest(
-      '.bookmark-row, .bookmark-card, .folder-card, .ctx-menu, .bulk-bar, .detail-panel'
-    )) {
-      clearSelection();
-    }
-  };
-  document.addEventListener('mousedown', handleMouseDown);
-  return () => document.removeEventListener('mousedown', handleMouseDown);
-}, [clearSelection, contextMenu, setContextMenu]);  // <-- add contextMenu + setContextMenu to deps
+  useEffect(() => {
+    const handleMouseDown = (e) => {
+      // Close context menu if clicking outside it
+      if (contextMenu && !e.target.closest('.ctx-menu')) {
+        setContextMenu(null);
+      }
+      // Deselect if clicking on empty space
+      if (!e.target.closest(
+        '.bookmark-row, .bookmark-card, .folder-card, .ctx-menu, .bulk-bar, .detail-panel'
+      )) {
+        clearSelection();
+      }
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [clearSelection, contextMenu, setContextMenu]);  // <-- add contextMenu + setContextMenu to deps
 
 
 
@@ -143,16 +128,16 @@ useEffect(() => {
   }
 
   // --- MAIN RENDER ---
-return (
+  return (
     <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      
+
       {/* Force the app into a vertical flex column */}
       <div className="app" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
         <Topbar />
-        
+
         {/* Force the body into a horizontal flex row */}
         <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          
+
           {/* Sidebar takes its natural width if it exists */}
           {showSidebar && <Sidebar />}
 
@@ -174,24 +159,24 @@ return (
 
         </div>
       </div>
-          
+
       {/* Mount the modals here globally */}
       <MassTaggerModal />
       <MassCopyModal />
       <MassMoveModal />
-      <ArchiveViewer />     
+      <ArchiveViewer />
       <DeleteConfirmationModal />
       <JobWidget />
-{contextMenu && (
-  <ContextMenu
-    x={contextMenu.x}
-    y={contextMenu.y}
-    options={contextMenu.options}
-    onClose={() => setContextMenu(null)}
-  />
-)}
-      
-       <DragOverlay modifiers={[snapCenterToCursor]}>
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          options={contextMenu.options}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      <DragOverlay modifiers={[snapCenterToCursor]}>
         {activeDragId ? (() => {
           const { selectedBookmarks, selectedFolders } = useStore.getState();
           const totalSelected = selectedBookmarks.size + selectedFolders.size;

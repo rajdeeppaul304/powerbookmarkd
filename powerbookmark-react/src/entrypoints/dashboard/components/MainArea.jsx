@@ -188,6 +188,8 @@ const handleItemClick = (id, e) => {
 
     const interleavedItems = useMemo(() => {
         const items = [...filteredFolders, ...filteredBookmarks];
+            console.log("interleavedItems before sort:", items.map(i => ({ id: i.id, name: i.name || i.title, position: i.position })));
+
         return items.sort((a, b) => (a.position ?? 999999) - (b.position ?? 999999));
     }, [filteredFolders, filteredBookmarks]);
 

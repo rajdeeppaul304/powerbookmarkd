@@ -5,6 +5,7 @@ routers/vaults.py - Vault listing, creation, renaming, and deletion
 from fastapi import APIRouter, HTTPException, Query
 
 from database import get_db
+from state import broadcast_sync
 
 router = APIRouter()
 
@@ -28,6 +29,7 @@ def create_vault(name: str = Query(...)):
     conn = get_db()
     conn.execute("INSERT OR IGNORE INTO vaults (name) VALUES (?)", (name.strip(),))
     conn.commit()
+    broadcast_sync({"type": "vaults_changed"})
     conn.close()
     return {"status": "created", "vault": name.strip()}
 
@@ -39,6 +41,9 @@ def rename_vault(old_name: str = Query(...), new_name: str = Query(...)):
     conn.execute("UPDATE bookmarks SET vault=? WHERE vault=?", (new_name, old_name))
     conn.execute("UPDATE folders SET vault=? WHERE vault=?", (new_name, old_name))
     conn.commit()
+    broadcast_sync({"type": "vaults_changed"})
+    broadcast_sync({"type": "bookmarks_changed"})
+    broadcast_sync({"type": "folders_changed"})
     conn.close()
     return {"status": "renamed", "from": old_name, "to": new_name}
 
@@ -52,6 +57,9 @@ def delete_vault(vault_name: str):
     conn.execute("DELETE FROM bookmarks WHERE vault=?", (vault_name,))
     conn.execute("DELETE FROM folders WHERE vault=?", (vault_name,))
     conn.commit()
+    broadcast_sync({"type": "vaults_changed"})
+    broadcast_sync({"type": "bookmarks_changed"})
+    broadcast_sync({"type": "folders_changed"})
     conn.close()
     return {"status": "deleted"}
 

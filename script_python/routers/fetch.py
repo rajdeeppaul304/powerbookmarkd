@@ -9,6 +9,7 @@ routers/fetch.py - Playwright-powered page fetch endpoints.
 import base64
 from pathlib import Path
 from typing import Optional
+from state import broadcast_sync
 
 from fastapi import APIRouter, HTTPException
 from playwright.async_api import async_playwright
@@ -110,6 +111,8 @@ async def fetch_bookmark_archive(bid: str, req: BookmarkFetchRequest):
         bid,
     ))
     conn.commit()
+    broadcast_sync({"type": "bookmarks_changed"})
+
 
     updated = conn.execute("SELECT * FROM bookmarks WHERE id=?", (bid,)).fetchone()
     d       = enrich_bookmark(conn, updated)
@@ -171,6 +174,7 @@ async def bulk_fetch_archives(req: BulkFetchRequest):
                     bid,
                 ))
                 db.commit()
+                broadcast_sync({"type": "bookmarks_changed"})
                 db.close()
 
                 successful_ids.append(bid)

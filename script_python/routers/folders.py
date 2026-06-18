@@ -15,7 +15,7 @@ from models import (
 )
 from ordering import ensure_order_row, move_order_row
 from utils import make_folder_id, row_to_dict, enrich_bookmark, descendant_folder_ids
-
+from state import broadcast_sync
 router = APIRouter()
 
 
@@ -150,6 +150,8 @@ def create_folder(req: FolderCreate):
     )
     ensure_order_row(conn, req.parent_id, fid, "folder")
     conn.commit()
+    broadcast_sync({"type": "folders_changed"})
+
     row = conn.execute("SELECT * FROM folders WHERE id=?", (fid,)).fetchone()
     conn.close()
     return row_to_dict(row)
@@ -166,6 +168,8 @@ def rename_folder(fid: str, req: FolderRename):
         raise HTTPException(404, "Folder not found")
     conn.execute("UPDATE folders SET name=? WHERE id=?", (req.name.strip(), fid))
     conn.commit()
+    broadcast_sync({"type": "folders_changed"})
+
     updated = conn.execute("SELECT * FROM folders WHERE id=?", (fid,)).fetchone()
     conn.close()
     return row_to_dict(updated)
@@ -194,6 +198,8 @@ def move_folder(fid: str, req: FolderMove):
     conn.execute("UPDATE folders SET parent_id=? WHERE id=?", (req.parent_id, fid))
     move_order_row(conn, req.parent_id, fid, "folder")
     conn.commit()
+    broadcast_sync({"type": "folders_changed"})
+
     updated = conn.execute("SELECT * FROM folders WHERE id=?", (fid,)).fetchone()
     conn.close()
     return row_to_dict(updated)
@@ -210,6 +216,8 @@ def delete_folder(fid: str):
     conn.execute("DELETE FROM item_order WHERE item_id=? AND item_type='folder'", (fid,))
     conn.execute("DELETE FROM folders WHERE id=?", (fid,))
     conn.commit()
+    broadcast_sync({"type": "folders_changed"})
+
     conn.close()
     return {"status": "deleted", "id": fid}
 
@@ -291,6 +299,8 @@ def set_folder_order(req: SetFolderOrderRequest):
             )
 
     conn.commit()
+    broadcast_sync({"type": "folders_changed"})
+
     conn.close()
     return {"status": "ok", "folder_id": req.folder_id, "count": len(req.items)}
 

@@ -4,23 +4,23 @@ import { useDroppable, useDraggable } from '@dnd-kit/core';
 // This component recursively calls itself!
 // Modify your FolderTree function to look like this:
 export default function FolderTree({ parentId = null, depth = 0 }) {
-      const { folders, activeVault } = useStore(); // <--- Pull activeVault directly
-  
-  const childFolders = folders
-    .filter(f => (f.parent_id || null) === parentId)
-    .filter(f => depth > 0 || f.vault === activeVault) // <--- Use it here safely
-    .sort((a, b) => (a.position ?? 999999) - (b.position ?? 999999));
-  
-  if (childFolders.length === 0 && depth > 0) return null;
+    const { folders, activeVault } = useStore();
 
-  return (
-    <>
-      {depth === 0 && <RootDropRow />}
-      {childFolders.map(f => (
-        <FolderRow key={f.id} folder={f} depth={depth} />
-      ))}
-    </>
-  );
+    const childFolders = folders
+        .filter(f => (f.parent_id || null) === parentId)
+        .filter(f => depth > 0 || f.vault === activeVault)
+        .sort((a, b) => (a.position ?? 999999) - (b.position ?? 999999));
+
+    if (childFolders.length === 0 && depth > 0) return null;
+
+    return (
+        <>
+            {depth === 0 && <RootDropRow />}
+            {childFolders.map(f => (
+                <FolderRow key={f.id} folder={f} depth={depth} />
+            ))}
+        </>
+    );
 }
 
 // Persistent target for the top level of the sidebar
@@ -50,43 +50,32 @@ const isActive = currentFilter.type === 'root'; // <--- FIX HERE
 
 // Sub-component so each row manages its own open/close state
 function FolderRow({ folder, depth }) {
-    const { folders, currentFilter, setFilter, bookmarks } = useStore();
-    const [isExpanded, setIsExpanded] = useState(true);
+    const { folders, currentFilter, setFilter, bookmarks, expandedFolderIds, toggleFolderExpanded } = useStore();
 
-    // 1. MAKE IT DROPPABLE (It can catch things)
+    const isExpanded = expandedFolderIds.has(folder.id);
     const { setNodeRef: setDropRef, isOver } = useDroppable({
         id: `drop-sidebar-${folder.id}`,
         data: { type: 'folder', id: folder.id }
     });
 
-
-    // 2. MAKE IT DRAGGABLE (It can be moved)
     const { setNodeRef: setDragRef, attributes, listeners, isDragging } = useDraggable({
         id: `drag-sidebar-${folder.id}`,
         data: { type: 'folder', id: folder.id }
     });
 
-    // --- DND-KIT SETUP ---
-    // const { setNodeRef, isOver } = useDroppable({
-    //     id: `folder-${folder.id}`,
-    //     data: { type: 'folder', id: folder.id }
-    // });
-
     const hasChildren = folders.some(f => f.parent_id === folder.id);
     const isActive = currentFilter.type === 'folder' && currentFilter.value === folder.id;
-
-    // Count bookmarks directly inside this folder
     const count = bookmarks.filter(b => b.folder_id === folder.id).length;
 
     const handleToggle = (e) => {
-        e.stopPropagation(); // Stop the click from selecting the folder
-        setIsExpanded(!isExpanded);
+        e.stopPropagation();
+        toggleFolderExpanded(folder.id);
     };
 
     return (
         <>
             <div
-                ref={(node) => { setDragRef(node); setDropRef(node); }} // Combine the refs!
+                ref={(node) => { setDragRef(node); setDropRef(node); }}
                 {...listeners}
                 {...attributes}
                 className={`folder-tree-row ${isActive ? 'active' : ''} ${isOver ? 'drag-over' : ''}`}
@@ -94,25 +83,28 @@ function FolderRow({ folder, depth }) {
                     paddingLeft: `${10 + (depth * 14)}px`,
                     backgroundColor: isOver ? 'rgba(59,130,246,0.18)' : '',
                     color: isOver ? 'var(--blue)' : '',
-                    opacity: isDragging ? 0.4 : 1, // Fade out while moving it
+                    opacity: isDragging ? 0.4 : 1,
                     cursor: 'pointer'
                 }}
                 onClick={() => setFilter('folder', folder.id)}
             >
-                {hasChildren ? (
-                    <span
-                        className={`folder-chevron ${isExpanded ? 'open' : ''}`}
-                        onClick={handleToggle}
-                    >▶</span>
-                ) : (
-                    <span className="folder-chevron-spacer"></span>
-                )}
+{hasChildren ? (
+    <span
+        className={`folder-chevron ${isExpanded ? 'open' : ''}`}
+        onClick={handleToggle}
+    >
+        <svg viewBox="0 0 24 24">
+            <path fill="currentColor" d="M10 17l5-5-5-5v10z"></path>
+        </svg>
+    </span>
+) : (
+    <span className="folder-chevron-spacer"></span>
+)}
                 <span className="item-icon">📁</span>
                 <span className="item-name">{folder.name}</span>
                 <span className="item-count">{count}</span>
             </div>
 
-            {/* THE MAGIC: If expanded, it calls FolderTree again to render its children */}
             {hasChildren && isExpanded && (
                 <FolderTree parentId={folder.id} depth={depth + 1} />
             )}

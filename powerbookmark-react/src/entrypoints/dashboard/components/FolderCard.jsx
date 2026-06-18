@@ -89,10 +89,18 @@ const handleContextMenu = (e) => {
   setContextMenu({ x: e.clientX, y: e.clientY, options: menuOptions });
 };
 
-  const handleMenuButton = (e) => {
+    const handleMenuButton = (e) => {
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
-    setContextMenu({ x: rect.right, y: rect.bottom, options: menuOptions });
+    
+    // y: rect.top aligns the top edges.
+    // x: rect.right - 180 pulls the menu left so its right edge aligns with the button.
+    // (You can tweak the '180' up or down depending on how wide your menu actually is).
+    setContextMenu({ 
+        x: rect.right - 165, 
+        y: rect.top, 
+        options: menuOptions 
+    });
   };
 
   return (
