@@ -2,17 +2,20 @@
 import { useNavigate, useLocation } from 'react-router-dom'; // <--- Add this
 import { useStore } from '../store';
 import FolderTree from './FolderTree';
-
+import { useMemo, useEffect } from 'react';
 
 export default function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const {
+  const {activeTagFilters, toggleTagFilter, setTagFilterMode, clearTagFilters, activeVault,
     sidebarPrimaryView, setSidebarPrimaryView,
     sidebarTagsView, toggleSidebarTags,
     vaults, bookmarks, folders, currentFilter, setFilter,
     setNewFolderOpen, setNewBookmarkOpen // <--- ADD THESE TWO
   } = useStore();
+
+
+
 
   const handleFilterClick = (type, value) => {
     setFilter(type, value);
@@ -21,15 +24,79 @@ export default function Sidebar() {
     }
   };
 
+
+  // Compute tags scoped to current context (recursively)
+const scopedTags = useMemo(() => {
+    const getDescendantIds = (folderId) => {
+        const result = [];
+        const queue = [folderId];
+        while (queue.length) {
+            const cur = queue.shift();
+            const children = folders.filter(f => f.parent_id === cur);
+            children.forEach(c => { result.push(c.id); queue.push(c.id); });
+        }
+        return result;
+    };
+
+    let scopedBms = [];
+    if (currentFilter.type === 'folder') {
+        const ids = [currentFilter.value, ...getDescendantIds(currentFilter.value)];
+        scopedBms = bookmarks.filter(b => ids.includes(b.folder_id));
+    } else if (currentFilter.type === 'vault') {
+        scopedBms = bookmarks.filter(b => b.vault === currentFilter.value);
+    } else if (currentFilter.type === 'root') {
+        scopedBms = bookmarks.filter(b => b.vault === activeVault);
+    } else {
+        scopedBms = bookmarks;
+    }
+
+    // Prune active tags not present in new scope
+    const available = new Set(scopedBms.flatMap(b => b.tags || []));
+    
+    // Auto-prune stale active tags (side-effect in memo is not ideal but pragmatic here)
+    const stale = activeTagFilters.tags.filter(t => !available.has(t));
+    if (stale.length > 0) {
+        // Schedule outside render
+        setTimeout(() => {
+            useStore.getState().set(state => ({
+                activeTagFilters: {
+                    ...state.activeTagFilters,
+                    tags: state.activeTagFilters.tags.filter(t => available.has(t))
+                }
+            }));
+        }, 0);
+    }
+
+    const counts = {};
+    scopedBms.forEach(b => (b.tags || []).forEach(t => {
+        counts[t] = (counts[t] || 0) + 1;
+    }));
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 20);
+}, [bookmarks, folders, currentFilter, activeVault, activeTagFilters]);
+
   // Calculate Top Tags dynamically from our bookmarks state
-  const tagCounts = {};
-  bookmarks.forEach(b => (b.tags || []).forEach(t => {
-    tagCounts[t] = (tagCounts[t] || 0) + 1;
-  }));
-  const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 12);
+  // const tagCounts = {};
+  // bookmarks.forEach(b => (b.tags || []).forEach(t => {
+  //   tagCounts[t] = (tagCounts[t] || 0) + 1;
+  // }));
+  // const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 12);
 
   // Helper to check if an item is currently selected
   const isActive = (type, value) => currentFilter.type === type && currentFilter.value === value;
+
+
+  useEffect(() => {
+    const available = new Set(scopedTags.map(([t]) => t));
+    const stale = activeTagFilters.tags.filter(t => !available.has(t));
+    if (stale.length > 0) {
+        useStore.setState(state => ({
+    activeTagFilters: {
+        ...state.activeTagFilters,
+        tags: state.activeTagFilters.tags.filter(t => available.has(t))
+    }
+}));
+    }
+}, [scopedTags]);
 
   return (
     <aside className="sidebar">
@@ -130,29 +197,50 @@ export default function Sidebar() {
 
       {/* TAGS SECTION */}
       {sidebarTagsView && (
-        <>
-          <div className="sidebar-divider"></div>
-          <div className="sidebar-section">
-            <div className="sidebar-section-header">
-              <span className="sidebar-label">Top Tags</span>
-            </div>
-            <div className="sidebar-section-body">
-              {topTags.length === 0 ? <div className="sidebar-empty">No tags yet</div> : null}
-              {topTags.map(([tag, count]) => (
-                <div
-                  key={tag}
-                  className={`sidebar-item ${isActive('tag', tag) ? 'active' : ''}`}
-                  onClick={() => handleFilterClick('tag', tag)}
-                >
-                  <span className="item-icon">#</span>
-                  <span className="item-name">{tag}</span>
-                  <span className="item-count">{count}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
+  <>
+    <div className="sidebar-divider" />
+    <div className="sidebar-section">
+      <div className="sidebar-section-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span className="sidebar-label">Tags</span>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          {activeTagFilters.tags.length > 0 && (
+            <>
+              <button
+                onClick={() => setTagFilterMode(activeTagFilters.mode === 'and' ? 'or' : 'and')}
+                style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: 'var(--bg3)', border: '1px solid var(--border)', color: 'var(--text2)', cursor: 'pointer' }}
+              >
+                {activeTagFilters.mode.toUpperCase()}
+              </button>
+              <button
+                onClick={clearTagFilters}
+                style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, background: 'var(--bg3)', border: '1px solid var(--border)', color: 'var(--text2)', cursor: 'pointer' }}
+              >✕</button>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="sidebar-section-body">
+        {scopedTags.length === 0
+          ? <div className="sidebar-empty">No tags in scope</div>
+          : scopedTags.map(([tag, count]) => {
+            const isActive = activeTagFilters.tags.includes(tag);
+            return (
+              <div
+                key={tag}
+                className={`sidebar-item ${isActive ? 'active' : ''}`}
+                onClick={() => toggleTagFilter(tag)}
+              >
+                <span className="item-icon">#</span>
+                <span className="item-name">{tag}</span>
+                <span className="item-count">{count}</span>
+              </div>
+            );
+          })
+        }
+      </div>
+    </div>
+  </>
+)}
 
 
       {/* TOOLS SECTION (Always visible at the bottom) */}

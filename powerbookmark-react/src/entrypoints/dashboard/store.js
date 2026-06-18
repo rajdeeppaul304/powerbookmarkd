@@ -21,6 +21,7 @@ export const useStore = create((set, get) => ({
     pendingDeletionPayload: null, // Holds { bookmarkIds: [], folderIds: [] } when modal is open
 
     jobs: [],
+    isDragging: false,
 
     undoStack: [],
     redoStack: [],
@@ -34,6 +35,7 @@ export const useStore = create((set, get) => ({
     // Selection State
     selectedBookmarks: new Set(),
     selectedFolders: new Set(),
+    selectionOrder: [], // [{ type: 'bookmark' | 'folder', id }] — tracks the order items were selected in
     // Modal State
     detailBookmark: null,
     isEditingDetails: false,
@@ -169,7 +171,7 @@ export const useStore = create((set, get) => ({
                 const mergedBookmarks = incomingBms.map(newBm => {
                     const oldBm = currentBms.get(newBm.id);
                     if (oldBm) {
-                        newBm.position = oldBm.position; // <--- PRESERVE THE LOCAL POSITION
+                        if (get().isDragging) newBm.position = oldBm.position;
                         if (JSON.stringify(oldBm) === JSON.stringify(newBm)) return oldBm;
                     }
                     return newBm;
@@ -180,7 +182,7 @@ export const useStore = create((set, get) => ({
                 const mergedFolders = allFolders.map(newFol => {
                     const oldFol = currentFols.get(newFol.id);
                     if (oldFol) {
-                        newFol.position = oldFol.position; // <--- PRESERVE THE LOCAL POSITION
+                        if (get().isDragging) newFol.position = oldFol.position;
                         if (JSON.stringify(oldFol) === JSON.stringify(newFol)) return oldFol;
                     }
                     return newFol;
@@ -193,15 +195,29 @@ export const useStore = create((set, get) => ({
 
                 const safeSelectedBms = new Set([...state.selectedBookmarks].filter(id => activeBmIds.has(id)));
                 const safeSelectedFols = new Set([...state.selectedFolders].filter(id => activeFolIds.has(id)));
+                const safeSelectionOrder = state.selectionOrder.filter(o =>
+                    o.type === 'bookmark' ? activeBmIds.has(o.id) : activeFolIds.has(o.id)
+                );
 
                 return {
                     vaults: vaultsList,
                     bookmarks: mergedBookmarks,
                     folders: mergedFolders,
                     selectedBookmarks: safeSelectedBms,
-                    selectedFolders: safeSelectedFols
+                    selectedFolders: safeSelectedFols,
+                    selectionOrder: safeSelectionOrder
                 };
             });
+
+            const { currentFilter } = get();
+            if (currentFilter.type === 'folder' || currentFilter.type === 'root' || currentFilter.type === 'vault') {
+                const folderId = currentFilter.type === 'folder' ? currentFilter.value : null;
+                api.getOrder(folderId).then(data => {
+                    if (!get().isDragging) {
+                        get().applyOrder(data.items);
+                    }
+                }).catch(() => { });
+            }
         } catch (err) {
             // If the backend goes down briefly, just ignore it. No need to throw red errors.
             console.warn("Background sync paused: Server unreachable");
@@ -209,37 +225,72 @@ export const useStore = create((set, get) => ({
     },
 
     // Filter & View Actions
-    setFilter: (type, value = null) => set(state => {
-    let newVault = state.activeVault;
+    setFilter: (type, value = null) => {
+        // Compute the new state synchronously first
+        const state = get();
+        let newVault = state.activeVault;
 
-    if (type === 'vault') newVault = value;
-    else if (type === 'folder') {
-        const f = state.folders.find(fol => fol.id === value);
-        if (f) newVault = f.vault;
-    }
-
-    // Expand the ancestor chain when navigating into a folder
-    let newExpandedFolderIds = state.expandedFolderIds;
-    if (type === 'folder' && value) {
-        const next = new Set(state.expandedFolderIds);
-        let currentId = value;
-        while (currentId) {
-            next.add(currentId);
-            const f = state.folders.find(fol => fol.id === currentId);
-            currentId = f?.parent_id ?? null;
+        if (type === 'vault') newVault = value;
+        else if (type === 'folder') {
+            const f = state.folders.find(fol => fol.id === value);
+            if (f) newVault = f.vault;
         }
-        newExpandedFolderIds = next;
-    }
 
-    return {
-        currentFilter: { type, value },
-        searchQuery: '',
-        selectedBookmarks: new Set(),
-        selectedFolders: new Set(),
-        activeVault: newVault,
-        expandedFolderIds: newExpandedFolderIds
-    };
-}),
+        let newExpandedFolderIds = state.expandedFolderIds;
+        if (type === 'folder' && value) {
+            const next = new Set(state.expandedFolderIds);
+            let currentId = value;
+            while (currentId) {
+                next.add(currentId);
+                const f = state.folders.find(fol => fol.id === currentId);
+                currentId = f?.parent_id ?? null;
+            }
+            newExpandedFolderIds = next;
+        }
+
+        const baseState = {
+            currentFilter: { type, value },
+            searchQuery: '',
+            selectedBookmarks: new Set(),
+            selectedFolders: new Set(),
+            activeVault: newVault,
+            expandedFolderIds: newExpandedFolderIds
+        };
+
+        // For folder/root/vault views, pre-fetch the order and apply it atomically
+        // so there's only ONE render with the correct positions — no flicker.
+        if (type === 'folder' || type === 'root' || type === 'vault') {
+            const folderId = type === 'folder' ? value : null;
+            api.getOrder(folderId)
+                .then(data => {
+                    const orderMap = new Map(
+                        data.items.map(i => [`${i.item_type}-${i.item_id}`, i.position])
+                    );
+                    set(state => ({
+                        ...baseState,
+                        bookmarks: state.bookmarks.map(b =>
+                            orderMap.has(`bookmark-${b.id}`)
+                                ? { ...b, position: orderMap.get(`bookmark-${b.id}`) }
+                                : b
+                        ),
+                        folders: state.folders.map(f =>
+                            orderMap.has(`folder-${f.id}`)
+                                ? { ...f, position: orderMap.get(`folder-${f.id}`) }
+                                : f
+                        )
+                    }));
+                })
+                .catch(() => {
+                    // Order fetch failed — at least switch the view without positions
+                    set(baseState);
+                });
+            // Don't set yet — wait for the order fetch above
+            return;
+        }
+
+        // For non-ordered views (tags, archived, etc.), switch immediately
+        set(baseState);
+    },
     setSearchQuery: (query) => set({ searchQuery: query }),
     setViewMode: (mode) => set({ viewMode: mode }),
     setSortMode: (mode) => set({ sortMode: mode }),
@@ -255,29 +306,71 @@ export const useStore = create((set, get) => ({
         set({ sidebarTagsView: nextState });
     },
 
+    // Tag filter state (separate from currentFilter)
+activeTagFilters: { tags: [], mode: 'or' },
+
+toggleTagFilter: (tag) => {
+    const { activeTagFilters } = get();
+    const exists = activeTagFilters.tags.includes(tag);
+    set({
+        activeTagFilters: {
+            ...activeTagFilters,
+            tags: exists
+                ? activeTagFilters.tags.filter(t => t !== tag)
+                : [...activeTagFilters.tags, tag]
+        }
+    });
+},
+
+setTagFilterMode: (mode) => set(state => ({
+    activeTagFilters: { ...state.activeTagFilters, mode }
+})),
+
+clearTagFilters: () => set({ activeTagFilters: { tags: [], mode: 'or' } }),
+
+    // Selection Actions
     // Selection Actions
     toggleBookmarkSelection: (id) => {
         const next = new Set(get().selectedBookmarks);
-        if (next.has(id)) next.delete(id); else next.add(id);
-        set({ selectedBookmarks: next });
+        let order = [...get().selectionOrder];
+        if (next.has(id)) {
+            next.delete(id);
+            order = order.filter(o => !(o.type === 'bookmark' && o.id === id));
+        } else {
+            next.add(id);
+            order.push({ type: 'bookmark', id });
+        }
+        set({ selectedBookmarks: next, selectionOrder: order });
     },
     toggleFolderSelection: (id) => {
         const next = new Set(get().selectedFolders);
-        if (next.has(id)) next.delete(id); else next.add(id);
-        set({ selectedFolders: next });
+        let order = [...get().selectionOrder];
+        if (next.has(id)) {
+            next.delete(id);
+            order = order.filter(o => !(o.type === 'folder' && o.id === id));
+        } else {
+            next.add(id);
+            order.push({ type: 'folder', id });
+        }
+        set({ selectedFolders: next, selectionOrder: order });
     },
-    clearSelection: () => set({ selectedBookmarks: new Set(), selectedFolders: new Set() }),
+    clearSelection: () => set({ selectedBookmarks: new Set(), selectedFolders: new Set(), selectionOrder: [] }),
     setSelection: (bookmarkIds, folderIds) => set({
         selectedBookmarks: new Set(bookmarkIds),
-        selectedFolders: new Set(folderIds)
+        selectedFolders: new Set(folderIds),
+        selectionOrder: [
+            ...bookmarkIds.map(id => ({ type: 'bookmark', id })),
+            ...folderIds.map(id => ({ type: 'folder', id })),
+        ]
     }),
-
     moveItemsToFolder: async (bookmarkIds, folderIds, targetFolderId) => {
         await get()._executeMove(bookmarkIds, folderIds, targetFolderId);
     },
 
     // Universal Reorder (Handles Folders & Bookmarks interleaved)
     reorderItems: async (activeId, overId) => {
+        set({ isDragging: true });
+
         const state = get();
         const currentFolderId = state.currentFilter.type === 'folder' ? state.currentFilter.value : null;
 
@@ -291,7 +384,10 @@ export const useStore = create((set, get) => ({
         const oldIndex = combined.findIndex(item => item.id === activeId);
         const newIndex = combined.findIndex(item => item.id === overId);
 
-        if (oldIndex === -1 || newIndex === -1) return;
+        if (oldIndex === -1 || newIndex === -1) {
+            set({ isDragging: false });
+            return;
+        }
 
         // 3. Move the array in memory
         combined = arrayMove(combined, oldIndex, newIndex);
@@ -318,12 +414,12 @@ export const useStore = create((set, get) => ({
 
         // 5. Instantly update UI
         set({ bookmarks: updatedBookmarks, folders: updatedFolders, sortMode: 'manual' });
-
-        // 6. Sync with server
         try {
             await api.saveOrder(currentFolderId, payload);
         } catch (err) {
             console.error("Failed to save order:", err);
+        } finally {
+            set({ isDragging: false });
         }
     },
 
@@ -649,7 +745,7 @@ export const useStore = create((set, get) => ({
         if (action === 'copy') {
             try {
                 const res = await api.bulkCopyItems(bookmarkIds, folderIds, targetFolderId, activeVault);
-                
+
                 set(state => ({
                     bookmarks: [...state.bookmarks, ...(res.new_bookmarks || [])],
                     folders: [...state.folders, ...(res.new_folders || [])],
@@ -659,7 +755,7 @@ export const useStore = create((set, get) => ({
 
                 await api.getOrder(targetFolderId).then(data => {
                     get().applyOrder(data.items);
-                }).catch(() => {});
+                }).catch(() => { });
 
                 get()._pushUndo({
                     type: 'copy',
@@ -821,23 +917,98 @@ export const useStore = create((set, get) => ({
         }
     },
     expandFolderChain: (folderId) => set(state => {
-    const next = new Set(state.expandedFolderIds);
-    let currentId = folderId;
-    while (currentId) {
-        next.add(currentId);
-        const f = state.folders.find(fol => fol.id === currentId);
-        currentId = f?.parent_id ?? null;
-    }
-    return { expandedFolderIds: next };
-}),
+        const next = new Set(state.expandedFolderIds);
+        let currentId = folderId;
+        while (currentId) {
+            next.add(currentId);
+            const f = state.folders.find(fol => fol.id === currentId);
+            currentId = f?.parent_id ?? null;
+        }
+        return { expandedFolderIds: next };
+    }),
 
-toggleFolderExpanded: (folderId) => set(state => {
-    const next = new Set(state.expandedFolderIds);
-    if (next.has(folderId)) next.delete(folderId);
-    else next.add(folderId);
-    return { expandedFolderIds: next };
-}),
+    toggleFolderExpanded: (folderId) => set(state => {
+        const next = new Set(state.expandedFolderIds);
+        if (next.has(folderId)) next.delete(folderId);
+        else next.add(folderId);
+        return { expandedFolderIds: next };
+    }),
+// Tab-group default mode (settings will let the user change this later)
+    tabGroupMode: localStorage.getItem('pb_tabgroup_mode') || 'single', // 'single' | 'perFolder'
+    setTabGroupMode: (mode) => {
+        localStorage.setItem('pb_tabgroup_mode', mode);
+        set({ tabGroupMode: mode });
+    },
 
+    _resolveSelectionToGroups: async () => {
+        const state = get();
+        const groups = [];
+
+        const looseUrls = state.bookmarks
+            .filter(b => state.selectedBookmarks.has(b.id))
+            .map(b => b.url);
+        if (looseUrls.length) {
+            groups.push({ label: 'Bookmarks', urls: looseUrls });
+        }
+
+        for (const folderId of state.selectedFolders) {
+            const folder = state.folders.find(f => f.id === folderId);
+            if (!folder) continue;
+            try {
+                const data = await api.getContents(folder.vault, folderId);
+                const urls = (data.bookmarks || []).map(b => b.url);
+                groups.push({ label: folder.name, urls });
+            } catch (err) {
+                console.error(`Failed to load contents for folder ${folderId}:`, err);
+            }
+        }
+
+        return groups;
+    },
+
+    // For 'single' tab-group mode: name the group after whatever was selected FIRST.
+    _getFirstSelectionLabel: () => {
+        const state = get();
+        const first = state.selectionOrder[0];
+        if (!first) return 'Opened Bookmarks';
+
+        if (first.type === 'bookmark') {
+            const bm = state.bookmarks.find(b => b.id === first.id);
+            return bm?.title || bm?.url || 'Opened Bookmarks';
+        } else {
+            const fol = state.folders.find(f => f.id === first.id);
+            return fol?.name || 'Opened Bookmarks';
+        }
+    },
+
+    // The one entry point for all 4 actions. Callable from dashboard or popup.
+    // action: 'current' | 'newWindow' | 'incognito' | 'tabGroup'
+    // groupBy: only used for 'tabGroup' — defaults to the saved tabGroupMode setting
+    openSelection: async (action, groupBy = null) => {
+        const groups = await get()._resolveSelectionToGroups();
+        const total = groups.reduce((n, g) => n + g.urls.length, 0);
+        if (total === 0) return { success: false, error: 'Nothing to open' };
+
+        const resolvedGroupBy = groupBy || get().tabGroupMode;
+        const singleLabel = resolvedGroupBy === 'single' ? get()._getFirstSelectionLabel() : null;
+
+        try {
+            const response = await chrome.runtime.sendMessage({
+                type: 'OPEN_ITEMS',
+                action,
+                groupBy: resolvedGroupBy,
+                groups,
+                singleLabel,
+            });
+            if (!response?.success) {
+                alert('Failed to open items: ' + (response?.error || 'Unknown error'));
+            }
+            return response;
+        } catch (err) {
+            alert('Failed to open items: ' + err.message);
+            return { success: false, error: err.message };
+        }
+    },
 
 
 }));

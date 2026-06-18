@@ -16,7 +16,7 @@ import asyncio
 import httpx
 from contextlib import asynccontextmanager
 from fastapi import WebSocket, WebSocketDisconnect
-from state import manager
+from state import manager, set_event_loop
 
 
 async def cron_purge_expired():
@@ -31,6 +31,8 @@ async def cron_purge_expired():
 
 @asynccontextmanager
 async def lifespan(app):
+    set_event_loop(asyncio.get_event_loop())  # add this line
+
     asyncio.create_task(cron_purge_expired())
     yield
 

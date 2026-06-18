@@ -177,28 +177,78 @@ export default function App() {
       )}
 
       <DragOverlay modifiers={[snapCenterToCursor]}>
-        {activeDragId ? (() => {
-          const { selectedBookmarks, selectedFolders } = useStore.getState();
-          const totalSelected = selectedBookmarks.size + selectedFolders.size;
+    {activeDragId ? (() => {
+        const { selectedBookmarks, selectedFolders } = useStore.getState();
+        const totalSelected = selectedBookmarks.size + selectedFolders.size;
 
-          const isDraggingSelection =
-            selectedBookmarks.has(activeDragId) ||
-            selectedFolders.has(activeDragId.replace('drag-folder-', ''));
+        // Strip all known prefixes to get the bare ID
+        const bareId = activeDragId
+            .replace('drag-folder-', '')
+            .replace('drag-bm-', '')
+            .replace('bookmark-', '');
 
-          const dragCount = (isDraggingSelection && totalSelected > 0) ? totalSelected : 1;
+        const isDraggingSelection =
+            selectedBookmarks.has(bareId) ||
+            selectedFolders.has(bareId);
 
-          return (
+        const dragCount = (isDraggingSelection && totalSelected > 0) ? totalSelected : 1;
+
+        // Get the name of the single item being dragged (for the pill label)
+        const { bookmarks, folders } = useStore.getState();
+        const draggedBookmark = bookmarks.find(b => b.id === bareId);
+        const draggedFolder = folders.find(f => f.id === bareId);
+        const singleLabel = draggedBookmark
+            ? (draggedBookmark.title || draggedBookmark.url)
+            : draggedFolder
+                ? draggedFolder.name
+                : 'Item';
+
+        return (
             <div style={{
-              background: 'var(--bg3)', border: '1px solid var(--blue)',
-              padding: '4px 8px', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-              color: 'var(--text)', fontSize: 12, fontWeight: 500, pointerEvents: 'none',
-              width: '120px', textAlign: 'center'
+                background: 'var(--bg3)',
+                border: '1px solid var(--blue)',
+                borderRadius: 10,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                color: 'var(--text)',
+                fontSize: 12,
+                fontWeight: 500,
+                pointerEvents: 'none',
+                maxWidth: 220,
+                padding: '6px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                position: 'relative',
             }}>
-              {dragCount > 1 ? `Moving ${dragCount} items` : `Moving 1 item`}
+                {dragCount > 1 && (
+                    <div style={{
+                        position: 'absolute',
+                        top: -8, right: -8,
+                        background: 'var(--blue)',
+                        color: '#fff',
+                        borderRadius: '50%',
+                        width: 20, height: 20,
+                        fontSize: 11, fontWeight: 700,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                        {dragCount}
+                    </div>
+                )}
+                <span style={{ fontSize: 16 }}>
+                    {draggedFolder ? '📁' : '🔖'}
+                </span>
+                <span style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                }}>
+                    {singleLabel}
+
+                </span>
             </div>
-          );
-        })() : null}
-      </DragOverlay>
+        );
+    })() : null}
+</DragOverlay>
     </DndContext>
   );
 }

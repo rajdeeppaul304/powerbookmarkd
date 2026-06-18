@@ -1,21 +1,16 @@
-"""
-state.py - Process-level shared state.
-
-Kept in its own module so that routers/jobs.py and routers/fetch.py
-can both import ACTIVE_JOBS without a circular dependency.
-"""
-
-from typing import Dict, Any, List
 import asyncio
 from fastapi import WebSocket
+from typing import Dict, Any, List
 
-# job_id -> { id, status, total, current, type }
 ACTIVE_JOBS: Dict[str, Any] = {}
+_event_loop = None  # set once at startup
+
+def set_event_loop(loop):
+    global _event_loop
+    _event_loop = loop
 
 
 class ConnectionManager:
-    """Tracks active WebSocket connections and broadcasts events to all of them."""
-
     def __init__(self):
         self.active_connections: List[WebSocket] = []
 
@@ -28,31 +23,19 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: dict):
-        dead_connections = []
+        dead = []
         for connection in self.active_connections:
             try:
                 await connection.send_json(message)
             except Exception:
-                dead_connections.append(connection)
-
-        for dead in dead_connections:
-            self.disconnect(dead)
+                dead.append(connection)
+        for d in dead:
+            self.disconnect(d)
 
 
 manager = ConnectionManager()
 
 
 def broadcast_sync(message: dict):
-    """
-    Fire-and-forget broadcast callable from synchronous route handlers
-    (your routers are all plain `def`, not `async def`, since they use
-    sqlite3 synchronously). Schedules the async broadcast on the running
-    event loop without blocking the request thread.
-    """
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(manager.broadcast(message), loop)
-    except RuntimeError:
-        # No running loop (shouldn't happen under uvicorn), just skip silently
-        pass
+    if _event_loop and _event_loop.is_running():
+        asyncio.run_coroutine_threadsafe(manager.broadcast(message), _event_loop)

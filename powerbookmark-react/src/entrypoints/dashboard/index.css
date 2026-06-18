@@ -690,6 +690,27 @@ body {
   color: var(--text);
 }
 
+.bulk-menu-item {
+  background: transparent;
+  border: none;
+  color: var(--text2);
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.12s;
+  width: 100%;
+}
+
+.bulk-menu-item:hover {
+  background: var(--bg4);
+  color: var(--text);
+}
+
+
+
 /* ── Grid ── */
 .bookmarks-grid {
   display: grid;

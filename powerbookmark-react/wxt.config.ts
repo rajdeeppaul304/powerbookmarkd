@@ -14,6 +14,7 @@ export default defineConfig({
       'storage',
       'scripting',
       'bookmarks',
+        'tabGroups', 
     ],
     host_permissions: [
       'http://127.0.0.1:8765/*',

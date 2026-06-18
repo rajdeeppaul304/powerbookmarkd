@@ -13,7 +13,7 @@ export const SelectionContext = createContext(null);
 
 // Mini component for our interactive breadcrumbs
 function DroppableCrumb({ folderId, name, isLast }) {
-    const { setFilter } = useStore();
+    const { setFilter, activeTagFilters } = useStore();
     const { setNodeRef, isOver } = useDroppable({
         id: `drop-crumb-${folderId || 'root'}`,
         data: { type: 'folder', id: folderId } // null folderId = Root!
@@ -43,7 +43,7 @@ export default function MainArea() {
         setContextMenu, bookmarks, folders, currentFilter, activeVault, sortMode, 
         setSortMode, searchQuery, viewMode, selectedBookmarks, selectedFolders, 
         setSelection, clearSelection, renameFolder, setDetailBookmark, 
-        setNewBookmarkOpen, setNewFolderOpen,
+        setNewBookmarkOpen, setNewFolderOpen, activeTagFilters,
         clipboard, executePaste // <--- ADDED THESE TWO
     } = useStore();
 
@@ -85,14 +85,14 @@ const handleItemClick = (id, e) => {
   }
 };
     // Instantly fetch the correct DB order for this specific view!
-    useEffect(() => {
-        if (currentFilter.type === 'folder' || currentFilter.type === 'root' || currentFilter.type === 'vault') {
-            const folderId = currentFilter.type === 'folder' ? currentFilter.value : null;
-            api.getOrder(folderId).then(data => {
-                useStore.getState().applyOrder(data.items);
-            }).catch(err => console.error("Could not fetch order:", err));
-        }
-    }, [currentFilter.value, currentFilter.type]);
+    // useEffect(() => {
+    //     if (currentFilter.type === 'folder' || currentFilter.type === 'root' || currentFilter.type === 'vault') {
+    //         const folderId = currentFilter.type === 'folder' ? currentFilter.value : null;
+    //         api.getOrder(folderId).then(data => {
+    //             useStore.getState().applyOrder(data.items);
+    //         }).catch(err => console.error("Could not fetch order:", err));
+    //     }
+    // }, [currentFilter.value, currentFilter.type]);
 
     
     // --- UPDATED CONTEXT MENU ---
@@ -149,14 +149,24 @@ const handleItemClick = (id, e) => {
     }, [selectedBookmarks, selectedFolders, folders, bookmarks, renameFolder, setDetailBookmark]);
 
     const filteredBookmarks = useMemo(() => {
-        let items = [...bookmarks];
+    let items = [...bookmarks];
 
-        if (currentFilter.type === "root") items = items.filter(b => !b.folder_id && b.vault === activeVault);
-        if (currentFilter.type === "vault") items = items.filter(b => b.vault === currentFilter.value && !b.folder_id);
-        if (currentFilter.type === "archived") items = items.filter(b => b.archived);
-        if (currentFilter.type === "screenshot") items = items.filter(b => b.screenshot);
-        if (currentFilter.type === "tag") items = items.filter(b => (b.tags || []).includes(currentFilter.value));
-        if (currentFilter.type === "folder") items = items.filter(b => b.folder_id === currentFilter.value);
+    if (currentFilter.type === "root") items = items.filter(b => !b.folder_id && b.vault === activeVault);
+    if (currentFilter.type === "vault") items = items.filter(b => b.vault === currentFilter.value && !b.folder_id);
+    if (currentFilter.type === "archived") items = items.filter(b => b.archived);
+    if (currentFilter.type === "screenshot") items = items.filter(b => b.screenshot);
+    if (currentFilter.type === "folder") items = items.filter(b => b.folder_id === currentFilter.value);
+
+    // Tag filter layer
+    const { tags, mode } = activeTagFilters;
+    if (tags.length > 0) {
+        items = items.filter(b => {
+            const bTags = b.tags || [];
+            return mode === 'and'
+                ? tags.every(t => bTags.includes(t))
+                : tags.some(t => bTags.includes(t));
+        });
+    }
 
         if (searchQuery) {
             const q = searchQuery.toLowerCase();
@@ -176,15 +186,45 @@ const handleItemClick = (id, e) => {
         }
 
         return items;
-    }, [bookmarks, currentFilter, searchQuery, sortMode, activeVault]);
+    },  [bookmarks, currentFilter, searchQuery, sortMode, activeVault, activeTagFilters]);
 
     const filteredFolders = useMemo(() => {
-        if (['archived', 'screenshot', 'tag', 'all'].includes(currentFilter.type)) return []; 
-        if (currentFilter.type === 'vault') return folders.filter(f => f.vault === currentFilter.value && !f.parent_id); 
-        if (currentFilter.type === 'folder') return folders.filter(f => f.parent_id === currentFilter.value); 
-        if (currentFilter.type === 'root') return folders.filter(f => !f.parent_id && f.vault === activeVault);
-        return folders.filter(f => !f.parent_id);
-    }, [folders, currentFilter, activeVault]);
+    if (['archived', 'screenshot', 'all'].includes(currentFilter.type)) return [];
+    
+    let direct = [];
+    if (currentFilter.type === 'vault') direct = folders.filter(f => f.vault === currentFilter.value && !f.parent_id);
+    else if (currentFilter.type === 'folder') direct = folders.filter(f => f.parent_id === currentFilter.value);
+    else if (currentFilter.type === 'root') direct = folders.filter(f => !f.parent_id && f.vault === activeVault);
+    else direct = folders.filter(f => !f.parent_id);
+
+    // If no tag filter active, show all direct subfolders as before
+    const { tags, mode } = activeTagFilters;
+    if (tags.length === 0) return direct;
+
+    // Helper: get all descendant folder ids of a given folder
+    const getDescendantIds = (folderId) => {
+        const result = [];
+        const queue = [folderId];
+        while (queue.length) {
+            const cur = queue.shift();
+            const children = folders.filter(f => f.parent_id === cur);
+            children.forEach(c => { result.push(c.id); queue.push(c.id); });
+        }
+        return result;
+    };
+
+    // Only show folders that have at least one matching bookmark in their subtree
+    return direct.filter(folder => {
+        const scopeIds = [folder.id, ...getDescendantIds(folder.id)];
+        const subtreeBookmarks = bookmarks.filter(b => scopeIds.includes(b.folder_id));
+        return subtreeBookmarks.some(b => {
+            const bTags = b.tags || [];
+            return mode === 'and'
+                ? tags.every(t => bTags.includes(t))
+                : tags.some(t => bTags.includes(t));
+        });
+    });
+}, [folders, currentFilter, activeVault, activeTagFilters, bookmarks]);
 
     const interleavedItems = useMemo(() => {
         const items = [...filteredFolders, ...filteredBookmarks];
@@ -204,7 +244,7 @@ const handleItemClick = (id, e) => {
         if (currentFilter.type === 'archived') return 'Archived';
         if (currentFilter.type === 'screenshot') return 'With Screenshot';
         if (currentFilter.type === 'vault') return `Vault: ${currentFilter.value}`;
-        if (currentFilter.type === 'tag') return `Tag: #${currentFilter.value}`;
+        // if (currentFilter.type === 'tag') return `Tag: #${currentFilter.value}`;
         if (currentFilter.type === 'folder') return `Folder View`; 
         return 'All Bookmarks';
     };

@@ -182,6 +182,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
 
+      case "OPEN_ITEMS": {
+        try {
+          const result = await openItems({
+            action: msg.action,
+            groupBy: msg.groupBy,
+            groups: msg.groups,
+            singleLabel: msg.singleLabel,
+          });
+          sendResponse(result);
+        } catch (e) {
+          sendResponse({ success: false, error: e.message });
+        }
+        break;
+      }
+
       case "DELETE": {
         try {
           const res  = await fetch(`${API}/bookmark/${msg.id}`, { method: "DELETE" });
@@ -342,6 +357,64 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   })();
   return true;
 });
+
+
+// ── Bulk open ───────────────────────────────────────────────────────────────
+async function openItems({ action, groupBy, groups, singleLabel }) {
+  const allUrls = groups.flatMap(g => g.urls);
+  if (allUrls.length === 0) return { success: true, opened: 0 };
+
+  if (action === "current") {
+    for (const url of allUrls) {
+      await chrome.tabs.create({ url, active: false });
+    }
+    return { success: true, opened: allUrls.length };
+  }
+
+  if (action === "newWindow" || action === "incognito") {
+    const win = await chrome.windows.create({
+      url: allUrls[0],
+      incognito: action === "incognito",
+    });
+    for (let i = 1; i < allUrls.length; i++) {
+      await chrome.tabs.create({ windowId: win.id, url: allUrls[i], active: false });
+    }
+    return { success: true, opened: allUrls.length, windowId: win.id };
+  }
+
+  if (action === "tabGroup") {
+    const groupIds = [];
+
+    if (groupBy === "perFolder") {
+      // One tab group per folder/source, each named after its label
+      for (const g of groups) {
+        if (g.urls.length === 0) continue;
+        const tabIds = [];
+        for (const url of g.urls) {
+          const tab = await chrome.tabs.create({ url, active: false });
+          tabIds.push(tab.id);
+        }
+        const groupId = await chrome.tabs.group({ tabIds });
+        await chrome.tabGroups.update(groupId, { title: g.label });
+        groupIds.push(groupId);
+      }
+    } else {
+      // Single combined group (matches Chrome's native bookmark manager behavior)
+      const tabIds = [];
+      for (const url of allUrls) {
+        const tab = await chrome.tabs.create({ url, active: false });
+        tabIds.push(tab.id);
+      }
+      const groupId = await chrome.tabs.group({ tabIds });
+      await chrome.tabGroups.update(groupId, { title: singleLabel || "Opened Bookmarks" });
+      groupIds.push(groupId);
+    }
+
+    return { success: true, opened: allUrls.length, groupIds };
+  }
+
+  return { success: false, error: `Unknown action: ${action}` };
+}
 
 
 
