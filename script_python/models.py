@@ -148,3 +148,12 @@ class TrashRestoreRequest(BaseModel):
 
 class TrashPurgeRequest(BaseModel):
     trash_ids: list[str]
+
+
+
+
+class VaultSetPin(BaseModel):
+    pin: Optional[str] = None  # None = remove PIN
+
+class VaultUnlockRequest(BaseModel):
+    pin: str

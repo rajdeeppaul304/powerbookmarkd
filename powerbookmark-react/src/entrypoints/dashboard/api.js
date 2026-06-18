@@ -200,4 +200,28 @@ purgeTrash: (trashIds) =>
         body: JSON.stringify({ trash_ids: trashIds })
     }).then(handleResponse),
 
+
+
+    setVaultPin: (name, pin) =>
+    fetch(`${API_URL}/vaults/${encodeURIComponent(name)}/set-pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin })
+    }).then(handleResponse),
+
+unlockVault: (name, pin) =>
+    fetch(`${API_URL}/vaults/${encodeURIComponent(name)}/unlock`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin })
+    }).then(handleResponse),
+
+lockVault: (name) =>
+    fetch(`${API_URL}/vaults/${encodeURIComponent(name)}/lock`, { method: "POST" }).then(handleResponse),
+
+lockAllVaults: () =>
+    fetch(`${API_URL}/vaults/lock-all`, { method: "POST" }).then(handleResponse),
+
+
+
 };

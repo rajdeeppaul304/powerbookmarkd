@@ -128,6 +128,12 @@ def init_db():
     if "favicon_path" not in existing_cols:
         c.execute("ALTER TABLE bookmarks ADD COLUMN favicon_path TEXT")
 
+    vault_cols = {row[1] for row in c.execute("PRAGMA table_info(vaults)").fetchall()}
+    if "pin_hash" not in vault_cols:
+        c.execute("ALTER TABLE vaults ADD COLUMN pin_hash TEXT")
+    if "is_locked" not in vault_cols:
+        c.execute("ALTER TABLE vaults ADD COLUMN is_locked INTEGER DEFAULT 0")
+
     # ── Ensure default vault and migrate existing vault names ─────────────────
     c.execute("INSERT OR IGNORE INTO vaults (name) VALUES ('default')")
     c.execute("INSERT OR IGNORE INTO vaults (name) SELECT DISTINCT vault FROM bookmarks")

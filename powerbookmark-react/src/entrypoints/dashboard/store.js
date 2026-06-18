@@ -32,6 +32,10 @@ export const useStore = create((set, get) => ({
     sortMode: 'manual',
     searchQuery: '',
 
+    // vault state
+unlockTarget: null,
+setUnlockTarget: (name) => set({ unlockTarget: name }),
+
     // Selection State
     selectedBookmarks: new Set(),
     selectedFolders: new Set(),
@@ -305,6 +309,42 @@ export const useStore = create((set, get) => ({
         localStorage.setItem("pb_sidebar_tags", nextState);
         set({ sidebarTagsView: nextState });
     },
+    unlockedVaults: JSON.parse(sessionStorage.getItem('pb_unlocked_vaults') || '{}'),
+vaultLockTimeout: parseInt(localStorage.getItem('pb_vault_lock_timeout') || '60'),
+
+setVaultLockTimeout: (minutes) => {
+    localStorage.setItem('pb_vault_lock_timeout', minutes);
+    set({ vaultLockTimeout: minutes });
+},
+
+isVaultUnlocked: (name) => {
+    const { unlockedVaults, vaultLockTimeout } = get();
+    const entry = unlockedVaults[name];
+    if (!entry) return false;
+    const elapsed = (Date.now() - entry.unlockedAt) / 1000 / 60; // in minutes
+    return elapsed < vaultLockTimeout;
+},
+
+unlockVault: async (name, pin) => {
+    const res = await api.unlockVault(name, pin);
+    const next = { ...get().unlockedVaults, [name]: { token: res.token, unlockedAt: Date.now() } };
+    sessionStorage.setItem('pb_unlocked_vaults', JSON.stringify(next));
+    set({ unlockedVaults: next });
+},
+
+lockVault: async (name) => {
+    await api.lockVault(name);
+    const next = { ...get().unlockedVaults };
+    delete next[name];
+    sessionStorage.setItem('pb_unlocked_vaults', JSON.stringify(next));
+    set({ unlockedVaults: next });
+},
+
+lockAllVaults: async () => {
+    await api.lockAllVaults();
+    sessionStorage.removeItem('pb_unlocked_vaults');
+    set({ unlockedVaults: {} });
+},
 
     // Tag filter state (separate from currentFilter)
 activeTagFilters: { tags: [], mode: 'or' },

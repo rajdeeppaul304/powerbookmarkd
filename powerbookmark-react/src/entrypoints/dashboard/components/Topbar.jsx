@@ -2,9 +2,11 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useStore } from '../store';
 
 export default function Topbar() {
-  const { bookmarks, viewMode, setViewMode, setSearchQuery } = useStore();
+  const { bookmarks, viewMode, setViewMode, setSearchQuery, lockAllVaults, vaults } = useStore();
+
   const navigate = useNavigate();
   const location = useLocation();
+  const hasAnyLockedVault = vaults.some(v => v.has_pin);
 
   const isActive = (path) => location.pathname === path;
 
@@ -41,6 +43,16 @@ export default function Topbar() {
           style={{ padding: '6px 12px' }}
           onClick={() => navigate('/trash')}
         >🗑 Trash</button>
+        {hasAnyLockedVault && (
+          <button
+            className="btn btn-secondary"
+            style={{ padding: '6px 12px' }}
+            onClick={lockAllVaults}
+            title="Lock all vaults"
+          >
+            🔒 Lock All
+          </button>
+        )}
       </div>
 
       <div className="search-wrap">

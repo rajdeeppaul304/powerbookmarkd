@@ -6,6 +6,10 @@ from fastapi import APIRouter, HTTPException, Query
 
 from database import get_db
 from state import broadcast_sync
+from models import VaultSetPin, VaultUnlockRequest
+import bcrypt
+import secrets
+from datetime import datetime
 
 router = APIRouter()
 
@@ -14,14 +18,15 @@ router = APIRouter()
 def list_vaults():
     conn = get_db()
     rows = conn.execute("""
-        SELECT v.name AS vault, COUNT(b.id) AS count
+        SELECT v.name AS vault, v.pin_hash, v.is_locked, COUNT(b.id) AS count
         FROM vaults v
         LEFT JOIN bookmarks b ON v.name = b.vault
         GROUP BY v.name
         ORDER BY v.name
     """).fetchall()
     conn.close()
-    return {"vaults": [{"name": r["vault"], "count": r["count"]} for r in rows]}
+    return {"vaults": [{"name": r["vault"], "count": r["count"], "is_locked": bool(r["is_locked"]), "has_pin": bool(r["pin_hash"])} for r in rows]}
+
 
 
 @router.post("/vaults")
@@ -78,3 +83,58 @@ def list_vault(vault_name: str, limit: int = 100, offset: int = 0):
     ).fetchone()[0]
     conn.close()
     return {"vault": vault_name, "bookmarks": results, "total": total}
+
+
+# In-memory token store: { token: vault_name }
+_vault_tokens: dict[str, str] = {}
+
+@router.post("/vaults/{vault_name}/set-pin")
+def set_vault_pin(vault_name: str, req: VaultSetPin):
+    conn = get_db()
+    row = conn.execute("SELECT name FROM vaults WHERE name=?", (vault_name,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, "Vault not found")
+    
+    if req.pin is None:
+        # Remove PIN (unlock vault permanently)
+        conn.execute("UPDATE vaults SET pin_hash=NULL, is_locked=0 WHERE name=?", (vault_name,))
+    else:
+        pin_hash = bcrypt.hashpw(req.pin.encode(), bcrypt.gensalt()).decode()
+        conn.execute("UPDATE vaults SET pin_hash=?, is_locked=1 WHERE name=?", (pin_hash, vault_name))
+    
+    conn.commit()
+    conn.close()
+    broadcast_sync({"type": "vaults_changed"})
+    return {"status": "ok"}
+
+
+@router.post("/vaults/{vault_name}/unlock")
+def unlock_vault(vault_name: str, req: VaultUnlockRequest):
+    conn = get_db()
+    row = conn.execute("SELECT pin_hash FROM vaults WHERE name=?", (vault_name,)).fetchone()
+    conn.close()
+    if not row or not row["pin_hash"]:
+        raise HTTPException(400, "Vault has no PIN set")
+    
+    if not bcrypt.checkpw(req.pin.encode(), row["pin_hash"].encode()):
+        raise HTTPException(401, "Incorrect PIN")
+    
+    token = secrets.token_hex(32)
+    _vault_tokens[token] = vault_name
+    return {"token": token}
+
+
+@router.post("/vaults/{vault_name}/lock")
+def lock_vault(vault_name: str):
+    # Invalidate all tokens for this vault
+    to_delete = [t for t, v in _vault_tokens.items() if v == vault_name]
+    for t in to_delete:
+        del _vault_tokens[t]
+    return {"status": "locked"}
+
+
+@router.post("/vaults/lock-all")
+def lock_all_vaults():
+    _vault_tokens.clear()
+    return {"status": "all_locked"}

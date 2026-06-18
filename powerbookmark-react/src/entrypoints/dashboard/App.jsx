@@ -21,6 +21,8 @@ import MassMoveModal from './components/MassMoveModal';
 import ArchiveViewer from './components/ArchiveViewer';
 import JobWidget from './components/JobWidget';
 import ContextMenu from './components/ContextMenu';
+import UnlockModal from './components/UnlockModal';
+
 import DeleteConfirmationModal from './components/DeleteConfirmationModal';
 import Trash from './pages/Trash';
 
@@ -167,6 +169,8 @@ export default function App() {
       <ArchiveViewer />
       <DeleteConfirmationModal />
       <JobWidget />
+      <UnlockModal />
+
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
