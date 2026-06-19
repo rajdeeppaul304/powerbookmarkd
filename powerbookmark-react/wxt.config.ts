@@ -14,11 +14,15 @@ export default defineConfig({
       'storage',
       'scripting',
       'bookmarks',
-        'tabGroups', 
+      'tabGroups', 
     ],
     host_permissions: [
       'http://127.0.0.1:8765/*',
       '<all_urls>'
     ],
-  }
+    web_accessible_resources: [{
+      resources: ['single-file-bundled.js', 'content.js'],
+      matches: ['<all_urls>']
+    }]
+}
 });

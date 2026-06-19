@@ -181,6 +181,83 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         break;
       }
+      
+      case "SAVE_ALL_TABS": {
+    const { vault, folder_id, tags, windowId, originalTabId, captureScreenshots } = msg;
+    const tabs = await chrome.tabs.query({ windowId });
+    const validTabs = tabs.filter(t => 
+        t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('about:')
+    );
+
+    const results = [];
+
+    for (const tab of validTabs) {
+        let screenshotData = null;
+
+        if (captureScreenshots) {
+    await chrome.tabs.update(tab.id, { active: true });
+
+    // Re-fetch fresh tab status instead of trusting stale query result
+    await new Promise(resolve => {
+        const checkAndWait = async () => {
+            const freshTab = await chrome.tabs.get(tab.id);
+            
+            if (freshTab.status === 'complete') {
+                setTimeout(resolve, 300);
+                return;
+            }
+
+            // Not complete yet, listen for it
+            const timeout = setTimeout(resolve, 5000);
+
+            const listener = (tabId, changeInfo) => {
+                if (tabId === tab.id && changeInfo.status === 'complete') {
+                    clearTimeout(timeout);
+                    chrome.tabs.onUpdated.removeListener(listener);
+                    setTimeout(resolve, 300);
+                }
+            };
+            chrome.tabs.onUpdated.addListener(listener);
+        };
+        checkAndWait();
+    });
+
+    screenshotData = await captureScreenshot(tab.id);
+}
+
+        try {
+            const res = await fetch(`${API}/save`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: tab.url,
+                    title: tab.title || '',
+                    vault,
+                    tags: tags || [],
+                    archive: false,
+                    screenshot: !!screenshotData,
+                    notes: '',
+                    folder_id: folder_id || null,
+                    favicon_url: tab.favIconUrl || '',
+                    screenshot_data: screenshotData,
+                    html_data: null,
+                }),
+            });
+            const data = await res.json();
+            results.push({ success: true, url: tab.url, id: data.id });
+        } catch (e) {
+            results.push({ success: false, url: tab.url, error: e.message });
+        }
+    }
+
+    // Restore original tab
+    if (captureScreenshots && originalTabId) {
+        await chrome.tabs.update(originalTabId, { active: true });
+    }
+
+    sendResponse({ success: true, results, total: results.length });
+    break;
+}
 
       case "OPEN_ITEMS": {
         try {

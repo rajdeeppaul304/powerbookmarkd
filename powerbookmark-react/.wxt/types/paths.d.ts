@@ -6,7 +6,10 @@ declare module "wxt/browser" {
     | ""
     | "/"
     | "/background.js"
+    | "/content.js"
     | "/dashboard.html"
+    | "/popup.html"
+    | "/single-file-bundled.js"
   type HtmlPublicPath = Extract<PublicPath, `${string}.html`>
   export interface WxtRuntime {
     getURL(path: PublicPath): string;

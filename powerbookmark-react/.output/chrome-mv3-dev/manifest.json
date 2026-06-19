@@ -16,6 +16,17 @@
     "<all_urls>",
     "http://localhost/*"
   ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "single-file-bundled.js",
+        "content.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
   "commands": {
     "wxt:reload-extension": {
       "description": "Reload the extension during development",
@@ -26,6 +37,10 @@
   },
   "background": {
     "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "PowerBookmark",
+    "default_popup": "popup.html"
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval' http://localhost:3000; object-src 'self';",

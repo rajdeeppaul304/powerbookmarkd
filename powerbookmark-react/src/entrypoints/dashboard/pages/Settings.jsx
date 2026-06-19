@@ -8,6 +8,14 @@ import { api } from '../api';
 export default function Settings() {
   const { vaults, loadInitialData, defaultVault, setDefaultVault, viewMode, setViewMode, vaultLockTimeout, setVaultLockTimeout } = useStore();
   const [newVaultName, setNewVaultName] = useState("");
+  const saveAllTabsScreenshot = localStorage.getItem('pb_save_all_tabs_screenshot') !== 'false';
+const [tabScreenshotMode, setTabScreenshotMode] = useState(saveAllTabsScreenshot);
+
+const handleTabScreenshotMode = (val) => {
+    localStorage.setItem('pb_save_all_tabs_screenshot', val);
+    setTabScreenshotMode(val);
+};
+
 
   const handleCreateVault = async () => {
     if (!newVaultName.trim()) return;
@@ -113,6 +121,23 @@ export default function Settings() {
             <option value={10080}>7 days</option>
           </select>
         </div>
+
+        <div className="detail-field" style={{ marginTop: '24px' }}>
+    <div className="detail-field-label">Save All Tabs — Screenshot Mode</div>
+    <select
+        className="tag-input"
+        style={{ maxWidth: '300px', cursor: 'pointer' }}
+        value={tabScreenshotMode ? 'flash' : 'none'}
+        onChange={e => handleTabScreenshotMode(e.target.value === 'flash')}
+    >
+        <option value="flash">📸 Flash tabs (real screenshots)</option>
+        <option value="none">⚡ No screenshot (instant)</option>
+    </select>
+    <p style={{ fontSize: '12px', color: 'var(--text3)', marginTop: '8px', lineHeight: '1.4' }}>
+        Flash tabs switches to each tab briefly to capture a screenshot. 
+        Visually jarring but captures logged-in content accurately.
+    </p>
+</div>
       </section>
 
       {/* MANAGE VAULTS */}
