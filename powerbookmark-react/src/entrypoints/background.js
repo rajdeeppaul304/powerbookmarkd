@@ -183,9 +183,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       
       case "SAVE_ALL_TABS": {
-    const { vault, folder_id, tags, windowId, originalTabId, captureScreenshots } = msg;
-    const tabs = await chrome.tabs.query({ windowId });
-    const validTabs = tabs.filter(t => 
+    const { vault, folder_id, tags, originalTabId, captureScreenshots, tabIds } = msg;
+
+    // Get only the tabs we were told to save
+    const tabs = await Promise.all(tabIds.map(id => chrome.tabs.get(id)));
+    const validTabs = tabs.filter(t =>
         t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('about:')
     );
 
@@ -195,35 +197,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         let screenshotData = null;
 
         if (captureScreenshots) {
-    await chrome.tabs.update(tab.id, { active: true });
+            await chrome.tabs.update(tab.id, { active: true });
 
-    // Re-fetch fresh tab status instead of trusting stale query result
-    await new Promise(resolve => {
-        const checkAndWait = async () => {
-            const freshTab = await chrome.tabs.get(tab.id);
-            
-            if (freshTab.status === 'complete') {
-                setTimeout(resolve, 300);
-                return;
-            }
+            await new Promise(resolve => {
+                const checkAndWait = async () => {
+                    const freshTab = await chrome.tabs.get(tab.id);
+                    if (freshTab.status === 'complete') {
+                        setTimeout(resolve, 300);
+                        return;
+                    }
+                    const timeout = setTimeout(resolve, 5000);
+                    const listener = (tabId, changeInfo) => {
+                        if (tabId === tab.id && changeInfo.status === 'complete') {
+                            clearTimeout(timeout);
+                            chrome.tabs.onUpdated.removeListener(listener);
+                            setTimeout(resolve, 300);
+                        }
+                    };
+                    chrome.tabs.onUpdated.addListener(listener);
+                };
+                checkAndWait();
+            });
 
-            // Not complete yet, listen for it
-            const timeout = setTimeout(resolve, 5000);
-
-            const listener = (tabId, changeInfo) => {
-                if (tabId === tab.id && changeInfo.status === 'complete') {
-                    clearTimeout(timeout);
-                    chrome.tabs.onUpdated.removeListener(listener);
-                    setTimeout(resolve, 300);
-                }
-            };
-            chrome.tabs.onUpdated.addListener(listener);
-        };
-        checkAndWait();
-    });
-
-    screenshotData = await captureScreenshot(tab.id);
-}
+            screenshotData = await captureScreenshot(tab.id);
+        }
 
         try {
             const res = await fetch(`${API}/save`, {
@@ -250,7 +247,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
     }
 
-    // Restore original tab
     if (captureScreenshots && originalTabId) {
         await chrome.tabs.update(originalTabId, { active: true });
     }

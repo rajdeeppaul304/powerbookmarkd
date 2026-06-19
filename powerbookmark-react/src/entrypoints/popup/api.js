@@ -30,4 +30,9 @@ export const api = {
     },
     getRecentBookmarks: (limit = 500) =>
     fetch(`${API_URL}/recent?limit=${limit}`).then(handle),
+
+getFolderPath: (folderId) =>
+    fetch(`${API_URL}/folders/${folderId}/path`).then(handle),
+
+
 };

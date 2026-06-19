@@ -3,6 +3,7 @@ import { api, API_URL } from './api';
 import { useCurrentTab } from './hooks/useCurrentTab';
 import SaveTab from './components/SaveTab';
 import ExplorerTab from './components/ExplorerTab';
+import SaveAllModal from './components/SaveAllModal';
 
 export default function App() {
     const [activeTab, setActiveTab] = useState('save');
@@ -10,6 +11,7 @@ export default function App() {
     const [vaults, setVaults] = useState([]);
     const [selectedVault, setSelectedVault] = useState('default');
     const currentTab = useCurrentTab();
+    const [saveAllModalTabs, setSaveAllModalTabs] = useState(null); // null = closed
 
     useEffect(() => {
         api.getHealth().catch(() => setOffline(true));
@@ -17,35 +19,66 @@ export default function App() {
             setVaults(data.vaults || []);
             const stored = localStorage.getItem('pb_default_vault') || 'default';
             setSelectedVault(stored);
-        }).catch(() => {});
+        }).catch(() => { });
     }, []);
 
     async function handleSaveAllTabs() {
-    if (!currentTab) return;
-    const confirmed = confirm(`Save all tabs in this window to vault "${selectedVault}"?`);
-    if (!confirmed) return;
+        if (!currentTab) return;
 
-    const captureScreenshots = localStorage.getItem('pb_save_all_tabs_screenshot') !== 'false';
+        // Step 1 — query tabs
+        const allTabs = await chrome.tabs.query({ windowId: currentTab.windowId });
+        const validTabs = allTabs.filter(t =>
+            t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('about:')
+        );
 
-    const res = await chrome.runtime.sendMessage({
-        type: 'SAVE_ALL_TABS',
-        windowId: currentTab.windowId,
-        originalTabId: currentTab.id,
-        vault: selectedVault,
-        folder_id: null,
-        tags: [],
-        captureScreenshots,
-    });
+        // Step 2 — pre-scan for duplicates
+        const scanned = await Promise.all(validTabs.map(async tab => {
+            try {
+                const data = await api.lookupUrl(tab.url);
+                return {
+                    ...tab,
+                    exists: data.exists,
+                    bookmarkId: data.bookmark_id || null,
+                };
+            } catch {
+                return { ...tab, exists: false, bookmarkId: null };
+            }
+        }));
 
-    if (res.success) {
-        const failed = res.results.filter(r => !r.success).length;
-        const saved = res.results.filter(r => r.success).length;
-        const t = document.getElementById('toast');
-        t.textContent = `✓ Saved ${saved} tabs${failed ? `, ${failed} failed` : ''}`;
-        t.classList.add('show');
-        setTimeout(() => t.classList.remove('show'), 3000);
+        // Step 3 — show modal
+        setSaveAllModalTabs(scanned);
     }
-}
+
+    async function handleSaveAllConfirm(mode) {
+        const tabs = mode === 'new-only'
+            ? saveAllModalTabs.filter(t => !t.exists)
+            : saveAllModalTabs;
+
+        setSaveAllModalTabs(null);
+
+        const captureScreenshots = localStorage.getItem('pb_save_all_tabs_screenshot') !== 'false';
+
+        const res = await chrome.runtime.sendMessage({
+            type: 'SAVE_ALL_TABS',
+            windowId: currentTab.windowId,
+            originalTabId: currentTab.id,
+            vault: selectedVault,
+            folder_id: null,
+            tags: [],
+            captureScreenshots,
+            tabIds: tabs.map(t => t.id), // only send selected tabs
+        });
+
+        if (res.success) {
+            const failed = res.results.filter(r => !r.success).length;
+            const saved = res.results.filter(r => r.success).length;
+            const t = document.getElementById('toast');
+            t.textContent = `✓ Saved ${saved} tabs${failed ? `, ${failed} failed` : ''}`;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+    }
+
 
 
     return (
@@ -65,8 +98,8 @@ export default function App() {
                     ⊞ Dashboard
                 </button>
                 <button className="dashboard-link" onClick={handleSaveAllTabs}>
-    📑 Save All Tabs
-</button>
+                    📑 Save All Tabs
+                </button>
             </div>
 
             <div className="tabs">
@@ -80,6 +113,14 @@ export default function App() {
                     </div>
                 ))}
             </div>
+
+            {saveAllModalTabs && (
+    <SaveAllModal
+        tabs={saveAllModalTabs}
+        onConfirm={handleSaveAllConfirm}
+        onCancel={() => setSaveAllModalTabs(null)}
+    />
+)}
 
             {activeTab === 'save' && (
                 <SaveTab

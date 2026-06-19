@@ -26,6 +26,7 @@ export default function SaveTab({ currentTab, vaults, selectedVault, setSelected
     const [doArchive, setDoArchive] = useState(false);
     const [selected, setSelected] = useState({ id: null, name: 'Root' });
     const [isDuplicate, setIsDuplicate] = useState(false);
+    const [dupLocation, setDupLocation] = useState('');
 
     useEffect(() => {
         if (!currentTab?.url) return;
@@ -45,7 +46,15 @@ export default function SaveTab({ currentTab, vaults, selectedVault, setSelected
                 setIsDuplicate(true);
                 setStatus(bm.archived ? 'archived' : 'saved');
                 if (bm.folder_id) {
-                    setSelected({ id: bm.folder_id, name: bm.folder_id }); // FolderPicker will resolve name
+                    try {
+                        const pathData = await api.getFolderPath(bm.folder_id);
+                        const chain = (pathData.breadcrumb || []).map(p => p.name).join(' / ');
+                        setDupLocation(`${bm.vault} → 📁 ${chain}`);
+                    } catch {
+                        setDupLocation(bm.vault);
+                    }
+                } else {
+                    setDupLocation(`${bm.vault} → Root`);
                 }
             } else {
                 setIsDuplicate(false);
@@ -86,6 +95,19 @@ export default function SaveTab({ currentTab, vaults, selectedVault, setSelected
                 setStatus(doArchive ? 'archived' : 'saved');
                 toast('✓ Bookmark saved');
                 await saveLastFolder(selectedVault, selected?.id || null, selected?.name || null);
+
+                // Update dupLocation for freshly saved bookmark
+                if (selected?.id) {
+                    try {
+                        const pathData = await api.getFolderPath(selected.id);
+                        const chain = (pathData.breadcrumb || []).map(p => p.name).join(' / ');
+                        setDupLocation(`${selectedVault} → 📁 ${chain}`);
+                    } catch {
+                        setDupLocation(`${selectedVault} → Root`);
+                    }
+                } else {
+                    setDupLocation(`${selectedVault} → Root`);
+                }
             } else {
                 throw new Error(res.error || 'Unknown error');
             }
@@ -130,7 +152,12 @@ export default function SaveTab({ currentTab, vaults, selectedVault, setSelected
                 {isDuplicate && (
                     <div className="duplicate-warning show">
                         <div className="dup-title">⚠ Already saved</div>
-                        <div className="dup-text">This URL exists in your bookmarks. Saving will update it.</div>
+                        <div className="dup-text">
+                            📍 {dupLocation || 'Loading…'}
+                        </div>
+                        <div className="dup-text" style={{ marginTop: 4 }}>
+                            Saving will update it.
+                        </div>
                     </div>
                 )}
 
@@ -158,9 +185,9 @@ export default function SaveTab({ currentTab, vaults, selectedVault, setSelected
 
                 {/* Tags */}
                 <div className="field">
-    <label>Tags (comma separated)</label>
-    <TagInput value={tags} onChange={setTags} />
-</div>
+                    <label>Tags (comma separated)</label>
+                    <TagInput value={tags} onChange={setTags} />
+                </div>
 
                 {/* Notes */}
                 <div className="field">
